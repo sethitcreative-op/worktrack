@@ -503,7 +503,9 @@ const DtrPage = () => {
     } else if (dtrFilterType === 'day') {
       const parts = dtrFilterValue.split('-');
       if (parts.length === 3) {
-        days.push({ dateStr: dtrFilterValue, dayNum: parseInt(parts[2], 10) });
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        days.push({ dateStr: dtrFilterValue, dayNum: parseInt(parts[2], 10), dayName });
       }
     }
     return days;
@@ -1596,7 +1598,7 @@ const DtrPage = () => {
                             return (
                               <tr key={dayObj.dateStr}>
                                 <td className="dtr-day-col">
-                                  {dtrFilterType === 'week' ? (
+                                  {dtrFilterType !== 'month' ? (
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
                                       <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
                                       <span>{dayObj.dateStr}</span>

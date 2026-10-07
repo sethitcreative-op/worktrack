@@ -491,7 +491,9 @@ const AdminDtrPage = () => {
     } else if (dtrFilterType === 'day') {
       const parts = dtrFilterValue.split('-');
       if (parts.length === 3) {
-        days.push({ dateStr: dtrFilterValue, dayNum: parseInt(parts[2], 10) });
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+          const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+          days.push({ dateStr: dtrFilterValue, dayNum: parseInt(parts[2], 10), dayName });
       }
     }
     return days;
@@ -2051,7 +2053,16 @@ const AdminDtrPage = () => {
 
                             return (
                               <tr key={dayObj.dateStr}>
-                                <td className="dtr-day-col">{dayObj.dayNum}</td>
+                                                                <td className="dtr-day-col">
+                                  {dtrFilterType !== 'month' ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
+                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
+                                      <span>{dayObj.dateStr}</span>
+                                    </div>
+                                  ) : (
+                                    dayObj.dayNum
+                                  )}
+                                </td>
                                 <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                   {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
                                 </td>
@@ -2201,7 +2212,16 @@ const AdminDtrPage = () => {
 
                           return (
                             <tr key={`${emp.id}-${dayObj.dateStr}`}>
-                              <td className="dtr-day-col">{dayObj.dayNum}</td>
+                                                              <td className="dtr-day-col">
+                                  {dtrFilterType !== 'month' ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
+                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
+                                      <span>{dayObj.dateStr}</span>
+                                    </div>
+                                  ) : (
+                                    dayObj.dayNum
+                                  )}
+                                </td>
                               <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                 {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
                               </td>
