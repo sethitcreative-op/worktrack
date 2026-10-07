@@ -204,7 +204,9 @@ const FixedDtrPage = () => {
     earnings: true,
     logInRecord: true,
     hours: true,
-    status: true
+    status: true,
+    daysWorked: true,
+    totalRate: true
   });
 
   const [showExportCenter, setShowExportCenter] = useState(false);
@@ -759,6 +761,7 @@ const FixedDtrPage = () => {
         weekly_rate: parseFloat(emp.weekly_rate || 0),
         employee_type: emp.employee_type || 'Timed',
         total_hours: 0,
+        days_worked: 0,
       };
     });
 
@@ -766,13 +769,19 @@ const FixedDtrPage = () => {
       const uid = r.user_id;
       if (grouped[uid] && r.status !== 'Absent') {
         grouped[uid].total_hours += parseFloat(r.total_hours || 0);
+        grouped[uid].days_worked += 1;
       }
     });
 
     const isFixed = category === 'Fixed';
-    const tableColumn = isFixed
-      ? ["NAME", "RATE"]
-      : ["NAME", "CATEGORY", "RATE", "TOTAL PAY"];
+    let tableColumn = [];
+    if (isFixed) {
+      if (pdfColumns.name !== false) tableColumn.push("NAME");
+      if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
+      if (pdfColumns.totalRate !== false) tableColumn.push("TOTAL RATE");
+    } else {
+      tableColumn = ["NAME", "CATEGORY", "RATE", "TOTAL PAY"];
+    }
 
     let grandTotalHrs = 0;
     let grandTotalEarnings = 0;
@@ -786,10 +795,11 @@ const FixedDtrPage = () => {
       grandTotalEarnings += earnings;
 
       if (isFixed) {
-        return [
-          record.full_name,
-          rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---'
-        ];
+        let row = [];
+        if (pdfColumns.name !== false) row.push(record.full_name);
+        if (pdfColumns.daysWorked !== false) row.push(String(record.days_worked));
+        if (pdfColumns.totalRate !== false) row.push(rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---');
+        return row;
       }
 
       return [
@@ -800,12 +810,7 @@ const FixedDtrPage = () => {
       ];
     });
 
-    if (isFixed) {
-      tableRows.push([
-        "GRAND TOTAL",
-        grandTotalHrs > 0 ? `${grandTotalHrs} hours` : '0 hours'
-      ]);
-    } else {
+    if (!isFixed) {
       tableRows.push([
         "GRAND TOTAL",
         "",
@@ -1626,16 +1631,10 @@ const FixedDtrPage = () => {
                           {fixedReportCategory === 'Fixed' ? (
                             <>
                               <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.logInRecord} onChange={e => setPdfColumns({ ...pdfColumns, logInRecord: e.target.checked })} /> Log in Record
+                                <input type="checkbox" checked={pdfColumns.daysWorked !== false} onChange={e => setPdfColumns({ ...pdfColumns, daysWorked: e.target.checked })} /> Days Worked
                               </label>
                               <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.rate} onChange={e => setPdfColumns({ ...pdfColumns, rate: e.target.checked })} /> Rate
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.hours} onChange={e => setPdfColumns({ ...pdfColumns, hours: e.target.checked })} /> Hours
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.status} onChange={e => setPdfColumns({ ...pdfColumns, status: e.target.checked })} /> Status
+                                <input type="checkbox" checked={pdfColumns.totalRate !== false} onChange={e => setPdfColumns({ ...pdfColumns, totalRate: e.target.checked })} /> Total Rate
                               </label>
                             </>
                           ) : (
