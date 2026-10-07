@@ -2050,7 +2050,9 @@ const AdminDtrPage = () => {
           </>
         ) : (
           <div className="dtr-all-employees-view">
-            {employees.map((emp, index) => {
+            {employees
+              .filter(emp => tableFilterType === 'all' || (emp.employee_type || 'Timed') === tableFilterType)
+              .map((emp, index) => {
               const empRecords = tableRecords.filter(r => String(r.user_id) === String(emp.id));
               let grandTotalHrs = 0;
               let grandTotalEarnings = 0;
