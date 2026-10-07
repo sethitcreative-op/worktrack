@@ -4,7 +4,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Download, CheckCircle, Clock, Filter, Settings, Calendar as CalendarIcon, ChevronDown, CalendarDays, Users, ListFilter, Edit, Trash2, Plus, X } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
-import './FixedDtrPage.css';
+import './AdminDtrPage.css';
 import API_BASE from '../../config/api';
 import CustomWeekPicker from '../../components/common/CustomWeekPicker';
 import { logSystemAction } from '../../utils/logger';
@@ -135,7 +135,7 @@ const MultiSelectDropdown = ({ options, selected, onChange, className = "premium
   );
 };
 
-const FixedDtrPage = () => {
+const AdminDtrPage = () => {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const user = JSON.parse(localStorage.getItem('user'));
@@ -563,6 +563,524 @@ const FixedDtrPage = () => {
   const isPmOutDisabled = loading || hasPmOut || !hasAmIn;
 
   // --- ADMIN EXPORT LOGIC ---
+  const handlePresetExport = (type) => {
+    const today = new Date();
+    let start = '';
+    let end = getLocalDateStr(today);
+
+    if (type === 'weekly') {
+      const [year, month, day] = exportWeekStr.split('-').map(Number);
+      if (year && month && day) {
+        const startObj = new Date(year, month - 1, day);
+        start = getLocalDateStr(startObj);
+        const endObj = new Date(startObj);
+        endObj.setDate(startObj.getDate() + 6);
+        end = getLocalDateStr(endObj);
+      }
+    } else if (type === 'monthly') {
+      const [year, month] = exportMonth.split('-').map(Number);
+      start = `${year}-${String(month).padStart(2, '0')}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    } else if (type === 'yearly') {
+      const lastYear = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+      start = getLocalDateStr(lastYear);
+    }
+
+    setStartDate(start);
+    setEndDate(end);
+
+    let usersToExport = customExportUsers;
+    if (type === 'weekly') usersToExport = weeklyExportUsers;
+    else if (type === 'monthly') usersToExport = monthlyExportUsers;
+
+    setTimeout(() => {
+      exportPDF(start, end, type, usersToExport);
+    }, 100);
+  };
+
+  const exportWeeklySchedulePDF = (startStr, endStr, usersToExport) => {
+    const doc = new jsPDF({ orientation: 'landscape' });
+
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 41, 59);
+    doc.text("Weekly Payroll Report", 148.5, 20, { align: "center" });
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(100, 116, 139);
+
+    const formatMMDDYYYY = (dateStr) => {
+      if (!dateStr) return 'All Time';
+      const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
+      return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`;
+    };
+    const cycleStr = (startStr && endStr) ? `${formatMMDDYYYY(startStr)} to ${formatMMDDYYYY(endStr)}` : "All Records";
+    doc.text(`Cycle: ${cycleStr}`, 148.5, 28, { align: "center" });
+
+    // Filter records by date range and users
+    let currentRecords = [...records];
+    if (!usersToExport.includes('all')) {
+      currentRecords = currentRecords.filter(r => usersToExport.includes(String(r.user_id)));
+    }
+    if (startStr) currentRecords = currentRecords.filter(r => r.date >= startStr);
+    if (endStr) currentRecords = currentRecords.filter(r => r.date <= endStr);
+
+    // Group by employee
+    const grouped = {};
+    let emps = employees;
+    if (!usersToExport.includes('all')) {
+      emps = employees.filter(e => usersToExport.includes(String(e.id)));
+    }
+
+    emps.forEach(emp => {
+      grouped[emp.id] = {
+        user_id: emp.id,
+        full_name: emp.full_name,
+        // Ensure rate is a valid number from the employees list
+        hourly_rate: parseFloat(emp.hourly_rate || 0),
+        weekly_rate: parseFloat(emp.weekly_rate || 0),
+        employee_type: emp.employee_type || 'Timed',
+        total_hours: 0,
+      };
+    });
+
+    currentRecords.forEach(r => {
+      const uid = r.user_id;
+      if (grouped[uid] && r.status !== 'Absent') {
+        grouped[uid].total_hours += parseFloat(r.total_hours || 0);
+      }
+    });
+
+    const tableColumn = ["NAME", "RATE"];
+
+    let grandTotalHrs = 0;
+    let grandTotalEarnings = 0;
+
+    const tableRows = Object.values(grouped).map(record => {
+      const hrs = parseFloat(record.total_hours || 0);
+      const isFixed = record.employee_type === 'Fixed';
+      const rate = isFixed ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
+      const earnings = isFixed ? rate : (hrs * rate);
+      grandTotalHrs += hrs;
+      grandTotalEarnings += earnings;
+      return [
+        record.full_name,
+        rate > 0 ? `$${rate.toFixed(2)}${isFixed ? '/wk' : '/hr'}` : '---'
+      ];
+    });
+
+    // Grand total row
+    tableRows.push([
+      "GRAND TOTAL",
+      ""
+    ]);
+
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 40,
+      theme: 'grid',
+      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      alternateRowStyles: { fillColor: [255, 255, 255] },
+      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      didParseCell: function (data) {
+        if (data.row.raw[0] === 'GRAND TOTAL') {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [200, 240, 210];
+        }
+      }
+    });
+
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
+    }
+
+    doc.save(`Weekly Payroll Summary Report.pdf`);
+    logSystemAction('DOWNLOAD_PAYROLL', 'Admin downloaded Weekly Payroll Summary Report PDF.');
+  };
+
+  const exportFixedReportPDF = (startStr, endStr, category, dateType, dateValue, usersToExport) => {
+    const doc = new jsPDF({ orientation: 'landscape' });
+
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 41, 59);
+    doc.text(`Report Salary - ${category}`, 148.5, 20, { align: "center" });
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(100, 116, 139);
+
+    const formatMMDDYYYY = (dateStr) => {
+      if (!dateStr) return 'All Time';
+      const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
+      return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`;
+    };
+
+    let periodStr = "";
+    if (dateType === 'month') {
+      const [y, m] = dateValue.split('-');
+      const d = new Date(y, m - 1);
+      periodStr = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    } else if (dateType === 'week') {
+      periodStr = `Week of ${formatMMDDYYYY(startStr)}`;
+    } else {
+      periodStr = formatMMDDYYYY(startStr);
+    }
+
+    doc.text(`Period: ${periodStr}`, 148.5, 28, { align: "center" });
+
+    // Filter records by date range and users
+    let currentRecords = [...records];
+    if (!usersToExport.includes('all')) {
+      currentRecords = currentRecords.filter(r => usersToExport.includes(String(r.user_id)));
+    }
+    if (startStr) currentRecords = currentRecords.filter(r => r.date >= startStr);
+    if (endStr) currentRecords = currentRecords.filter(r => r.date <= endStr);
+
+    // Group by employee
+    const grouped = {};
+    let emps = employees;
+    if (!usersToExport.includes('all')) {
+      emps = employees.filter(e => usersToExport.includes(String(e.id)));
+    }
+
+    emps.forEach(emp => {
+      grouped[emp.id] = {
+        user_id: emp.id,
+        full_name: emp.full_name,
+        hourly_rate: parseFloat(emp.hourly_rate || 0),
+        weekly_rate: parseFloat(emp.weekly_rate || 0),
+        employee_type: emp.employee_type || 'Timed',
+        total_hours: 0,
+        days_worked: 0,
+      };
+    });
+
+    currentRecords.forEach(r => {
+      const uid = r.user_id;
+      if (grouped[uid] && r.status !== 'Absent') {
+        grouped[uid].total_hours += parseFloat(r.total_hours || 0);
+        grouped[uid].days_worked += 1;
+      }
+    });
+
+    const isFixed = category === 'Fixed';
+    let tableColumn = [];
+    if (isFixed) {
+      if (pdfColumns.name !== false) tableColumn.push("NAME");
+      if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
+      if (pdfColumns.totalRate !== false) tableColumn.push("TOTAL RATE");
+    } else {
+      tableColumn = ["NAME", "CATEGORY", "RATE", "TOTAL PAY"];
+    }
+
+    let grandTotalHrs = 0;
+    let grandTotalEarnings = 0;
+
+    const tableRows = Object.values(grouped).map(record => {
+      const hrs = parseFloat(record.total_hours || 0);
+      const isFixedUser = record.employee_type === 'Fixed';
+      const rate = isFixedUser ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
+      const earnings = isFixedUser ? rate : (hrs * rate);
+      grandTotalHrs += hrs;
+      grandTotalEarnings += earnings;
+
+      if (isFixed) {
+        let row = [];
+        if (pdfColumns.name !== false) row.push(record.full_name);
+        if (pdfColumns.daysWorked !== false) row.push(String(record.days_worked));
+        if (pdfColumns.totalRate !== false) row.push(rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---');
+        return row;
+      }
+
+      return [
+        record.full_name,
+        category,
+        rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---',
+        earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
+      ];
+    });
+
+    if (!isFixed) {
+      tableRows.push([
+        "GRAND TOTAL",
+        "",
+        formatHoursDuration(grandTotalHrs),
+        grandTotalEarnings > 0 ? `$${grandTotalEarnings.toFixed(2)}` : '-- -- --'
+      ]);
+    }
+
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 40,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      didParseCell: function (data) {
+        if (data.row.raw[0] === 'GRAND TOTAL') {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [59, 130, 246];
+          data.cell.styles.textColor = [255, 255, 255];
+        }
+      }
+    });
+
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
+    }
+
+    doc.save(`Report_Salary_${category}_${periodStr}.pdf`);
+    logSystemAction('DOWNLOAD_PAYROLL', `Admin downloaded Report Salary PDF for ${category}.`);
+  };
+
+  const exportTimeCardPDF = (startStr, endStr, dateType, dateValue, usersToExport) => {
+    const doc = new jsPDF({ orientation: 'portrait' });
+
+    // Filter records by date range and users
+    let currentRecords = [...records];
+    if (!usersToExport.includes('all')) {
+      currentRecords = currentRecords.filter(r => usersToExport.includes(String(r.user_id)));
+    }
+    if (startStr) currentRecords = currentRecords.filter(r => r.date >= startStr);
+    if (endStr) currentRecords = currentRecords.filter(r => r.date <= endStr);
+
+    // Group by employee
+    let emps = employees;
+    if (!usersToExport.includes('all')) {
+      emps = employees.filter(e => usersToExport.includes(String(e.id)));
+    }
+
+    const formatShortDate = (dateStr) => {
+      if (!dateStr) return '';
+      const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
+      return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${String(d.getFullYear()).slice(-2)}`;
+    };
+
+    const formatLongDate = (dateStr) => {
+      const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
+      return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    };
+
+    const getDaysArray = (start, end) => {
+      const arr = [];
+      const dt = new Date(start.includes('T') ? start : start + 'T00:00:00');
+      const endDt = new Date(end.includes('T') ? end : end + 'T00:00:00');
+      while (dt <= endDt) {
+        arr.push(new Date(dt));
+        dt.setDate(dt.getDate() + 1);
+      }
+      return arr;
+    };
+
+    const daysList = (startStr && endStr) ? getDaysArray(startStr, endStr) : [];
+
+    let isFirstPage = true;
+
+    emps.forEach((emp, index) => {
+      if (!isFirstPage) {
+        doc.addPage();
+      }
+      isFirstPage = false;
+
+      const empRecords = currentRecords.filter(r => String(r.user_id) === String(emp.id));
+      const rate = parseFloat(emp.hourly_rate || 0);
+
+      // --- Header Rendering ---
+      // Impact Pro PH - Employee Timecard
+      doc.setFillColor(146, 208, 80); // Green color from image
+      doc.rect(14, 15, 120, 8, 'F');
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
+      doc.text("Impact Pro PH - Employee Timecard", 16, 21);
+
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.text("Pay Cycle:", 14, 32);
+
+      doc.setFont("helvetica", "normal");
+
+      let cycleText = 'Custom';
+      if (dateType === 'month') {
+        const [y, m] = dateValue.split('-');
+        const d = new Date(y, m - 1);
+        cycleText = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      } else if (dateType === 'week') {
+        const startDay = daysList.length > 0 ? daysList[0].toLocaleDateString('en-US', { weekday: 'long' }) : '';
+        const endDay = daysList.length > 0 ? daysList[daysList.length - 1].toLocaleDateString('en-US', { weekday: 'long' }) : '';
+        cycleText = startDay && endDay ? `${startDay} - ${endDay}` : 'Custom';
+      } else if (dateType === 'day') {
+        cycleText = daysList.length > 0 ? daysList[0].toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : 'Custom';
+      } else {
+        cycleText = `${startStr} to ${endStr}`;
+      }
+      doc.text(cycleText, 55, 32);
+
+      doc.setFont("helvetica", "bold");
+      doc.text("Rate per Hour:", 14, 38);
+
+      doc.setFillColor(226, 239, 218); // Light green background for rate
+      doc.rect(53, 33, 35, 6, 'F');
+      doc.setFont("helvetica", "normal");
+      doc.text(rate.toFixed(2), 86, 38, { align: "right" });
+
+      // EMPLOYEE row
+      doc.setFillColor(255, 255, 0); // Yellow
+      doc.rect(14, 45, 120, 8, 'F');
+      doc.setFont("helvetica", "bold");
+      doc.text(`EMPLOYEE: ${emp.full_name}`, 16, 50.5);
+
+      // Pay Period
+      doc.text("Pay Period:", 14, 65);
+
+      // START / END Headers
+      doc.text("START", 73, 59, { align: "center" });
+      doc.text("END", 107.5, 59, { align: "center" });
+
+      // drawing a rect for the dates
+      doc.setFillColor(255, 255, 0);
+      doc.rect(53, 60, 40, 7, 'F'); // START date rect
+      doc.rect(95, 60, 25, 7, 'F'); // END date rect
+
+      doc.setFont("helvetica", "normal");
+      doc.text(formatShortDate(startStr), 73, 65, { align: "center" });
+      doc.text(formatShortDate(endStr), 107.5, 65, { align: "center" });
+
+      // Table Generation
+      const tableRows = [];
+      let totalHrs = 0;
+      let totalPay = 0;
+
+      daysList.forEach(d => {
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const record = empRecords.find(r => r.date === dateStr);
+
+        const hrs = record && record.status !== 'Absent' ? parseFloat(record.total_hours || 0) : 0;
+        const pay = hrs * rate;
+
+        totalHrs += hrs;
+        totalPay += pay;
+
+        let inTime = '12:00 AM';
+        let outTime = '12:00 AM';
+        let rowHrs = '0.00';
+
+        if (record && record.status !== 'Absent') {
+          inTime = record.am_in ? formatTime(record.am_in, record.date) : (record.pm_in ? formatTime(record.pm_in, record.date) : '12:00 AM');
+          outTime = record.pm_out ? formatTime(record.pm_out, record.date) : (record.am_out ? formatTime(record.am_out, record.date) : '12:00 AM');
+          rowHrs = hrs.toFixed(2);
+        }
+
+        tableRows.push([
+          formatLongDate(dateStr),
+          hrs > 0 ? hrs.toFixed(2) : '-',
+          pay > 0 ? pay.toFixed(2) : '-'
+        ]);
+      });
+
+      autoTable(doc, {
+        startY: 75,
+        head: [['Day', 'Hours Worked', 'Daily Pay']],
+        body: tableRows,
+        theme: 'plain',
+        headStyles: {
+          fillColor: [217, 225, 242], // Light blue
+          textColor: [0, 0, 0],
+          fontStyle: 'bold',
+          lineWidth: 0.1,
+          lineColor: [200, 200, 200],
+          cellPadding: { top: 3, right: 2, bottom: 3, left: 2 }
+        },
+        bodyStyles: {
+          textColor: [0, 0, 0],
+          lineWidth: 0.1,
+          lineColor: [200, 200, 200],
+          cellPadding: { top: 3, right: 2, bottom: 3, left: 2 }
+        },
+        columnStyles: {
+          0: { cellWidth: 70 },
+          1: { cellWidth: 28, halign: 'right' },
+          2: { cellWidth: 28, halign: 'right' }
+        }
+      });
+
+      const finalY = doc.lastAutoTable.finalY;
+
+      doc.setFillColor(252, 228, 214); // Light orange
+      doc.rect(14, finalY, 181, 8, 'F');
+
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+
+      doc.text(totalHrs.toFixed(2), 110, finalY + 5, { align: "right" });
+      doc.text(`$${totalPay.toFixed(2)}`, 138, finalY + 5, { align: "right" });
+    });
+
+    let periodStr = "";
+    if (dateType === 'month') {
+      const [y, m] = dateValue.split('-');
+      const d = new Date(y, m - 1);
+      periodStr = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    } else if (dateType === 'week') {
+      periodStr = `Week_of_${startStr}`;
+    } else {
+      periodStr = startStr;
+    }
+
+    doc.save(`Time_Card_Report_${periodStr}.pdf`);
+    logSystemAction('DOWNLOAD_PAYROLL', `Admin downloaded Time Card PDF.`);
+  };
+
+  const handleFixedReportExport = () => {
+    let start = '';
+    let end = '';
+    const today = new Date();
+
+    if (fixedReportDateType === 'month') {
+      const [year, month] = fixedReportDateValue.split('-').map(Number);
+      start = `${year}-${String(month).padStart(2, '0')}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    } else if (fixedReportDateType === 'week') {
+      const [year, month, day] = fixedReportDateValue.split('-').map(Number);
+      if (year && month && day) {
+        const startObj = new Date(year, month - 1, day);
+        start = getLocalDateStr(startObj);
+        const endObj = new Date(startObj);
+        endObj.setDate(startObj.getDate() + 6);
+        end = getLocalDateStr(endObj);
+      }
+    } else if (fixedReportDateType === 'day') {
+      start = fixedReportDateValue;
+      end = fixedReportDateValue;
+    }
+
+    setTimeout(() => {
+      if (fixedReportCategory === 'Time Card') {
+        exportTimeCardPDF(start, end, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
+      } else {
+        exportPDF(start, end, 'custom', fixedReportUsers, fixedReportCategory);
+      }
+    }, 100);
+  };
+
   const handleEmployeePdfExport = () => {
     const doc = new jsPDF({ orientation: 'portrait' });
 
@@ -1208,16 +1726,30 @@ const FixedDtrPage = () => {
               </button>
             </div>
 
-            
+            {isAdmin && (
+              <>
+                <div className="toolbar-divider"></div>
+                <div className="toolbar-group">
+                  <div className="toolbar-label">
+                    <Users size={16} /> Employee
+                  </div>
+                  <select
+                    className="toolbar-input"
+                    style={{ minWidth: '180px' }}
+                    value={tableFilterUser}
+                    onChange={e => setTableFilterUser(e.target.value)}
+                  >
+                    <option value="all">All Employees</option>
+                    {employees.map(emp => (
+                      <option key={emp.id} value={emp.id}>{emp.full_name}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
           </div>
 
-          {!isAdmin && (
-            <div style={{ marginLeft: 'auto' }}>
-              <button className="btn btn-outline-primary" onClick={handleEmployeePdfExport} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', padding: '6px 12px', background: 'transparent', color: 'var(--primary)', border: '1px solid var(--primary)', borderRadius: '6px', cursor: 'pointer' }}>
-                <Download size={16} /> Download PDF
-              </button>
-            </div>
-          )}
+          
         </div>
 
         {displayUser ? (
@@ -1686,4 +2218,4 @@ const FixedDtrPage = () => {
   );
 };
 
-export default FixedDtrPage;
+export default AdminDtrPage;

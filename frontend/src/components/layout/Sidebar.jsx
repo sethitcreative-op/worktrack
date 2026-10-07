@@ -125,6 +125,12 @@ const Sidebar = () => {
           <span>Daily Time Record</span>
         </NavLink>
 
+        {isAdmin && (
+          <NavLink to="/admin-dtr" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <span>DTR Management</span>
+          </NavLink>
+        )}
+
         <div className="nav-group">
           <NavLink
             to="/calendar"

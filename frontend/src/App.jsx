@@ -4,6 +4,7 @@ import Login from './pages/Login/Login';
 import DashboardLayout from './components/layout/DashboardLayout';
 import DtrPage from './pages/DTR/DtrPage';
 import FixedDtrPage from './pages/DTR/FixedDtrPage';
+import AdminDtrPage from './pages/DTR/AdminDtrPage';
 import CalendarPage from './pages/Calendar/CalendarPage';
 import EmployeeManagement from './pages/Employees/EmployeeManagement';
 import ProfilePage from './pages/Profile/ProfilePage';
@@ -91,6 +92,7 @@ function App() {
               <Route index element={<IndexRedirect />} />
               <Route path="dtr" element={<DtrPage />} />
               <Route path="fixed-dtr" element={<FixedDtrPage />} />
+              <Route path="admin-dtr" element={<AdminDtrPage />} />
               <Route path="calendar" element={<CalendarPage />} />
               <Route path="calendar/requests" element={<ApprovalRequestsPage />} />
               <Route path="calendar/my-requests" element={<MyRequestsPage />} />
