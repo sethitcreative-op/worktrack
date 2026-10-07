@@ -189,6 +189,7 @@ const AdminDtrPage = () => {
   const [weeklyExportUsers, setWeeklyExportUsers] = useState(['all']);
   const [customExportUsers, setCustomExportUsers] = useState(['all']);
   const [tableFilterUser, setTableFilterUser] = useState('all');
+  const [tableFilterType, setTableFilterType] = useState('all');
   const [fixedReportCategory, setFixedReportCategory] = useState('Timed');
   const [fixedReportDateType, setFixedReportDateType] = useState('month');
   const [fixedReportDateValue, setFixedReportDateValue] = useState(() => new Date().toISOString().slice(0, 7));
@@ -498,9 +499,15 @@ const AdminDtrPage = () => {
   }, [dtrFilterType, dtrFilterValue]);
 
   // Filter records for the main table view
-  const tableRecords = tableFilterUser === 'all'
-    ? records
-    : records.filter(r => String(r.user_id) === String(tableFilterUser));
+  const tableRecords = records.filter(r => {
+    if (tableFilterUser !== 'all' && String(r.user_id) !== String(tableFilterUser)) return false;
+    if (tableFilterType !== 'all') {
+      const emp = employees.find(e => String(e.id) === String(r.user_id));
+      const empType = emp?.employee_type || 'Timed';
+      if (empType !== tableFilterType) return false;
+    }
+    return true;
+  });
 
   let displayUser = user;
   if (isAdmin && tableFilterUser !== 'all') {
@@ -516,6 +523,9 @@ const AdminDtrPage = () => {
     // Group records by user_id for the selectedMonth
     const summaryMap = {};
     employees.forEach(emp => {
+      const empType = emp.employee_type || 'Timed';
+      if (tableFilterType !== 'all' && empType !== tableFilterType) return;
+
       summaryMap[emp.id] = {
         ...emp,
         daysPresent: 0,
@@ -1731,6 +1741,24 @@ const AdminDtrPage = () => {
                 <div className="toolbar-divider"></div>
                 <div className="toolbar-group">
                   <div className="toolbar-label">
+                    <Filter size={16} /> Employee Type
+                  </div>
+                  <select
+                    className="toolbar-input"
+                    value={tableFilterType}
+                    onChange={e => {
+                      setTableFilterType(e.target.value);
+                      setTableFilterUser('all');
+                    }}
+                  >
+                    <option value="all">All Types</option>
+                    <option value="Timed">Timed Employees</option>
+                    <option value="Fixed">Fixed Employees</option>
+                  </select>
+                </div>
+                <div className="toolbar-divider"></div>
+                <div className="toolbar-group">
+                  <div className="toolbar-label">
                     <Users size={16} /> Employee
                   </div>
                   <select
@@ -1740,9 +1768,12 @@ const AdminDtrPage = () => {
                     onChange={e => setTableFilterUser(e.target.value)}
                   >
                     <option value="all">All Employees</option>
-                    {employees.map(emp => (
-                      <option key={emp.id} value={emp.id}>{emp.full_name}</option>
-                    ))}
+                    {employees
+                      .filter(emp => tableFilterType === 'all' || (emp.employee_type || 'Timed') === tableFilterType)
+                      .map(emp => (
+                        <option key={emp.id} value={emp.id}>{emp.full_name}</option>
+                      ))
+                    }
                   </select>
                 </div>
               </>
