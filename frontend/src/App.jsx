@@ -72,6 +72,9 @@ function ScrollToTop() {
 
 const IndexRedirect = () => {
   const user = JSON.parse(localStorage.getItem('user'));
+  if (user?.role === 'admin') {
+    return <Navigate to="/admin-dtr" />;
+  }
   if (user?.employee_type === 'Fixed') {
     return <Navigate to="/fixed-dtr" />;
   }
