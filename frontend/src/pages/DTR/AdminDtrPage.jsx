@@ -653,6 +653,7 @@ const AdminDtrPage = () => {
         weekly_rate: parseFloat(emp.weekly_rate || 0),
         employee_type: emp.employee_type || 'Timed',
         total_hours: 0,
+        days_worked: 0,
       };
     });
 
@@ -660,31 +661,58 @@ const AdminDtrPage = () => {
       const uid = r.user_id;
       if (grouped[uid] && r.status !== 'Absent') {
         grouped[uid].total_hours += parseFloat(r.total_hours || 0);
+        grouped[uid].days_worked += 1;
       }
     });
 
-    const tableColumn = ["NAME", "RATE"];
+    const tableColumn = ["NAME", "CATEGORY", "WORKED", "RATE", "DEDUCTION", "TOTAL PAY"];
 
-    let grandTotalHrs = 0;
     let grandTotalEarnings = 0;
 
     const tableRows = Object.values(grouped).map(record => {
       const hrs = parseFloat(record.total_hours || 0);
+      const days = parseInt(record.days_worked || 0);
       const isFixed = record.employee_type === 'Fixed';
       const rate = isFixed ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
-      const earnings = isFixed ? rate : (hrs * rate);
-      grandTotalHrs += hrs;
+      
+      let deduction = 0;
+      let earnings = 0;
+      let workedStr = "";
+
+      if (isFixed) {
+        workedStr = `${days} days`;
+        // Deduct if days < 5
+        if (days < 5) {
+          const absents = 5 - days;
+          deduction = (rate / 5) * absents;
+        }
+        earnings = rate - deduction;
+        if (earnings < 0) earnings = 0;
+      } else {
+        workedStr = formatHoursDuration(hrs);
+        earnings = hrs * rate;
+      }
+
       grandTotalEarnings += earnings;
+      
       return [
         record.full_name,
-        rate > 0 ? `$${rate.toFixed(2)}${isFixed ? '/wk' : '/hr'}` : '---'
+        isFixed ? 'Fixed' : 'Timed',
+        workedStr,
+        rate > 0 ? `$${rate.toFixed(2)}${isFixed ? '/wk' : '/hr'}` : '---',
+        deduction > 0 ? `-$${deduction.toFixed(2)}` : '---',
+        earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
       ];
     });
 
     // Grand total row
     tableRows.push([
       "GRAND TOTAL",
-      ""
+      "",
+      "",
+      "",
+      "",
+      `$${grandTotalEarnings.toFixed(2)}`
     ]);
 
     autoTable(doc, {
@@ -795,57 +823,90 @@ const AdminDtrPage = () => {
 
     let grandTotalHrs = 0;
     let grandTotalEarnings = 0;
+    let currentY = 40;
 
-    const tableRows = Object.values(grouped).map(record => {
+    Object.values(grouped).forEach((record, index) => {
       const hrs = parseFloat(record.total_hours || 0);
+      const days = parseInt(record.days_worked || 0);
       const isFixedUser = record.employee_type === 'Fixed';
       const rate = isFixedUser ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
-      const earnings = isFixedUser ? rate : (hrs * rate);
+      
+      let deduction = 0;
+      let earnings = 0;
+      
+      if (isFixedUser) {
+        if (days < 5) {
+          const absents = 5 - days;
+          deduction = (rate / 5) * absents;
+        }
+        earnings = rate - deduction;
+        if (earnings < 0) earnings = 0;
+      } else {
+        earnings = hrs * rate;
+      }
+
       grandTotalHrs += hrs;
       grandTotalEarnings += earnings;
 
+      let row = [];
       if (isFixed) {
-        let row = [];
         if (pdfColumns.name !== false) row.push(record.full_name);
-        if (pdfColumns.daysWorked !== false) row.push(String(record.days_worked));
-        if (pdfColumns.totalRate !== false) row.push(rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---');
-        return row;
+        if (pdfColumns.daysWorked !== false) row.push(String(days));
+        if (pdfColumns.totalRate !== false) row.push(earnings > 0 ? `$${earnings.toFixed(2)}` : '---');
+      } else {
+        row = [
+          record.full_name,
+          category,
+          rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---',
+          earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
+        ];
       }
 
-      return [
-        record.full_name,
-        category,
-        rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---',
-        earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
-      ];
+      // Check if we need a new page
+      if (currentY > 170) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      doc.setFontSize(12);
+      doc.setTextColor(30, 41, 59);
+      doc.text(`Salary Slip - ${record.full_name}`, 14, currentY);
+
+      autoTable(doc, {
+        head: [tableColumn],
+        body: [row],
+        startY: currentY + 5,
+        theme: 'grid',
+        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+        bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      });
+
+      currentY = doc.lastAutoTable.finalY + 20;
     });
 
-    if (!isFixed) {
-      tableRows.push([
-        "GRAND TOTAL",
-        "",
-        formatHoursDuration(grandTotalHrs),
-        grandTotalEarnings > 0 ? `$${grandTotalEarnings.toFixed(2)}` : '-- -- --'
-      ]);
+    // Draw Grand Total at the very end
+    if (!isFixed && currentY > 180) {
+      doc.addPage();
+      currentY = 20;
     }
 
-    autoTable(doc, {
-      head: [tableColumn],
-      body: tableRows,
-      startY: 40,
-      theme: 'grid',
-      headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      didParseCell: function (data) {
-        if (data.row.raw[0] === 'GRAND TOTAL') {
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.fillColor = [59, 130, 246];
-          data.cell.styles.textColor = [255, 255, 255];
-        }
-      }
-    });
+    if (!isFixed) {
+      autoTable(doc, {
+        head: [],
+        body: [[
+          "GRAND TOTAL",
+          "",
+          formatHoursDuration(grandTotalHrs),
+          grandTotalEarnings > 0 ? `$${grandTotalEarnings.toFixed(2)}` : '-- -- --'
+        ]],
+        startY: currentY,
+        theme: 'grid',
+        bodyStyles: { textColor: [255, 255, 255], fillColor: [59, 130, 246], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+        styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      });
+    }
 
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
@@ -1086,7 +1147,7 @@ const AdminDtrPage = () => {
       if (fixedReportCategory === 'Time Card') {
         exportTimeCardPDF(start, end, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
       } else {
-        exportPDF(start, end, 'custom', fixedReportUsers, fixedReportCategory);
+        exportFixedReportPDF(start, end, fixedReportCategory, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
       }
     }, 100);
   };

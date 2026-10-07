@@ -41,7 +41,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
     $user_id = $data->user_id;
     
     // Use server's reliable time to prevent time theft
-    $server_time = date('H:i:s');
+    $server_time = ($action === 'fixed_in') ? '10:00:00' : date('H:i:s');
     $server_date = date('Y-m-d');
     $server_datetime = $server_date . ' ' . $server_time;
     
