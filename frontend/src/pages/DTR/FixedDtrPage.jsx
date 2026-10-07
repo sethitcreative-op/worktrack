@@ -173,13 +173,12 @@ const FixedDtrPage = () => {
   // Helper: format decimal hours (e.g. 8.5) to "HH:MM:SS"
   const formatHoursDuration = (decimalHours) => {
     const val = parseFloat(decimalHours);
-    if (!val || isNaN(val) || val === 0) return '00:00:00';
+    if (!val || isNaN(val) || val === 0) return '0hrs 0mins';
     const totalSeconds = Math.round(val * 3600);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
 
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    return `${hours}hrs ${minutes}mins`;
   };
 
   // Advanced Export State (Admin Only)

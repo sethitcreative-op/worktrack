@@ -40,8 +40,10 @@ function calculateTotalHours($am_in, $am_out, $pm_in, $pm_out) {
 if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
     $user_id = $data->user_id;
     
-    // Use server's reliable time to prevent time theft
-    $server_time = ($action === 'fixed_in') ? '10:00:00' : date('H:i:s');
+    // Use server's reliable time to prevent time theft, and round to nearest 30 minutes
+    $time_unix = time();
+    $rounded_time = round($time_unix / 1800) * 1800;
+    $server_time = ($action === 'fixed_in') ? '10:00:00' : date('H:i:s', $rounded_time);
     $server_date = date('Y-m-d');
     $server_datetime = $server_date . ' ' . $server_time;
     
