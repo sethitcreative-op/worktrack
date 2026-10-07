@@ -473,7 +473,9 @@ const AdminDtrPage = () => {
       const daysInMonth = new Date(year, month, 0).getDate();
       for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        days.push({ dateStr, dayNum: day });
+        const d = new Date(year, month - 1, day);
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        days.push({ dateStr, dayNum: day, dayName });
       }
     } else if (dtrFilterType === 'week') {
       const [year, month, day] = dtrFilterValue.split('-').map(Number);
@@ -485,7 +487,8 @@ const AdminDtrPage = () => {
           const y = d.getFullYear();
           const m = String(d.getMonth() + 1).padStart(2, '0');
           const dt = String(d.getDate()).padStart(2, '0');
-          days.push({ dateStr: `${y}-${m}-${dt}`, dayNum: d.getDate() });
+          const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+          days.push({ dateStr: `${y}-${m}-${dt}`, dayNum: d.getDate(), dayName });
         }
       }
     } else if (dtrFilterType === 'day') {
@@ -819,7 +822,12 @@ const AdminDtrPage = () => {
       if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
       if (pdfColumns.totalRate !== false) tableColumn.push("TOTAL RATE");
     } else {
-      tableColumn = ["NAME", "CATEGORY", "RATE", "TOTAL PAY"];
+      if (pdfColumns.name !== false) tableColumn.push("NAME");
+      tableColumn.push("CATEGORY");
+      if (pdfColumns.totalHrs !== false) tableColumn.push("WORKED");
+      if (pdfColumns.rate !== false) tableColumn.push("RATE");
+      tableColumn.push("DEDUCTION");
+      if (pdfColumns.earnings !== false) tableColumn.push("TOTAL PAY");
     }
 
     let grandTotalHrs = 0;
@@ -857,8 +865,10 @@ const AdminDtrPage = () => {
       } else {
         row = [
           record.full_name,
-          category,
-          rate > 0 ? `$${rate.toFixed(2)}${isFixedUser ? '/wk' : '/hr'}` : '---',
+          isFixedUser ? 'Fixed' : 'Timed',
+          formatHoursDuration(hrs),
+          rate > 0 ? `$${rate.toFixed(2)}/hr` : '---',
+          '---', // Deduction is always --- for Timed
           earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
         ];
       }
@@ -887,27 +897,7 @@ const AdminDtrPage = () => {
       currentY = doc.lastAutoTable.finalY + 20;
     });
 
-    // Draw Grand Total at the very end
-    if (!isFixed && currentY > 180) {
-      doc.addPage();
-      currentY = 20;
-    }
-
-    if (!isFixed) {
-      autoTable(doc, {
-        head: [],
-        body: [[
-          "GRAND TOTAL",
-          "",
-          formatHoursDuration(grandTotalHrs),
-          grandTotalEarnings > 0 ? `$${grandTotalEarnings.toFixed(2)}` : '-- -- --'
-        ]],
-        startY: currentY,
-        theme: 'grid',
-        bodyStyles: { textColor: [255, 255, 255], fillColor: [59, 130, 246], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-        styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      });
-    }
+    // Grand total removed as per user preference for separated employee slips
 
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
@@ -1710,30 +1700,21 @@ const AdminDtrPage = () => {
                               </label>
                             </>
                           ) : (
-                            <>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.totalHrs} onChange={e => setPdfColumns({ ...pdfColumns, totalHrs: e.target.checked })} /> Total Hrs
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.rate} onChange={e => setPdfColumns({ ...pdfColumns, rate: e.target.checked })} /> Rate
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.amIn} onChange={e => setPdfColumns({ ...pdfColumns, amIn: e.target.checked })} /> AM In
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.amOut} onChange={e => setPdfColumns({ ...pdfColumns, amOut: e.target.checked })} /> AM Out
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.pmIn} onChange={e => setPdfColumns({ ...pdfColumns, pmIn: e.target.checked })} /> PM In
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.pmOut} onChange={e => setPdfColumns({ ...pdfColumns, pmOut: e.target.checked })} /> PM Out
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.earnings} onChange={e => setPdfColumns({ ...pdfColumns, earnings: e.target.checked })} /> Total Pay
-                              </label>
-                            </>
-                          )}
+                              <>
+                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+                                  <input type="checkbox" checked={pdfColumns.name} onChange={e => setPdfColumns({ ...pdfColumns, name: e.target.checked })} /> Name
+                                </label>
+                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+                                  <input type="checkbox" checked={pdfColumns.totalHrs} onChange={e => setPdfColumns({ ...pdfColumns, totalHrs: e.target.checked })} /> Total Hrs
+                                </label>
+                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+                                  <input type="checkbox" checked={pdfColumns.rate} onChange={e => setPdfColumns({ ...pdfColumns, rate: e.target.checked })} /> Rate
+                                </label>
+                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+                                  <input type="checkbox" checked={pdfColumns.earnings} onChange={e => setPdfColumns({ ...pdfColumns, earnings: e.target.checked })} /> Total Pay
+                                </label>
+                              </>
+                            )}
                         </div>
                       </div>
                     )}
@@ -2053,16 +2034,12 @@ const AdminDtrPage = () => {
 
                             return (
                               <tr key={dayObj.dateStr}>
-                                                                <td className="dtr-day-col">
-                                  {dtrFilterType !== 'month' ? (
+                                                                <td className="dtr-day-col" style={{ width: '120px' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
                                       <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
                                       <span>{dayObj.dateStr}</span>
                                     </div>
-                                  ) : (
-                                    dayObj.dayNum
-                                  )}
-                                </td>
+                                  </td>
                                 <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                   {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
                                 </td>
@@ -2212,16 +2189,12 @@ const AdminDtrPage = () => {
 
                           return (
                             <tr key={`${emp.id}-${dayObj.dateStr}`}>
-                                                              <td className="dtr-day-col">
-                                  {dtrFilterType !== 'month' ? (
+                                                              <td className="dtr-day-col" style={{ width: '120px' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
                                       <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
                                       <span>{dayObj.dateStr}</span>
                                     </div>
-                                  ) : (
-                                    dayObj.dayNum
-                                  )}
-                                </td>
+                                  </td>
                               <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                 {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
                               </td>

@@ -484,7 +484,9 @@ const DtrPage = () => {
       const daysInMonth = new Date(year, month, 0).getDate();
       for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        days.push({ dateStr, dayNum: day });
+        const d = new Date(year, month - 1, day);
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        days.push({ dateStr, dayNum: day, dayName });
       }
     } else if (dtrFilterType === 'week') {
       const [year, month, day] = dtrFilterValue.split('-').map(Number);
@@ -1597,16 +1599,12 @@ const DtrPage = () => {
 
                             return (
                               <tr key={dayObj.dateStr}>
-                                <td className="dtr-day-col">
-                                  {dtrFilterType !== 'month' ? (
+                                <td className="dtr-day-col" style={{ width: '120px' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
                                       <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
                                       <span>{dayObj.dateStr}</span>
                                     </div>
-                                  ) : (
-                                    dayObj.dayNum
-                                  )}
-                                </td>
+                                  </td>
                                 {displayUser?.employee_type === 'Fixed' ? (
                                   <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                     {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
@@ -1795,16 +1793,12 @@ const DtrPage = () => {
 
                           return (
                             <tr key={`${emp.id}-${dayObj.dateStr}`}>
-                              <td className="dtr-day-col">
-                                {dtrFilterType === 'week' ? (
-                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
-                                    <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
-                                    <span>{dayObj.dateStr}</span>
-                                  </div>
-                                ) : (
-                                  dayObj.dayNum
-                                )}
-                              </td>
+                              <td className="dtr-day-col" style={{ width: '120px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
+                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
+                                      <span>{dayObj.dateStr}</span>
+                                    </div>
+                                  </td>
                               {emp.employee_type === 'Fixed' ? (
                                 <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                   {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
