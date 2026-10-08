@@ -81,7 +81,9 @@ const Login = () => {
           addNotification({ type: 'success', message: `Welcome ${name}` });
         }
 
-        if (response.data.user.employee_type === 'Fixed') {
+        if (role === 'admin') {
+          navigate('/admin-dtr');
+        } else if (response.data.user.employee_type === 'Fixed') {
           navigate('/fixed-dtr');
         } else {
           navigate('/dtr');

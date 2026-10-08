@@ -562,7 +562,10 @@ const AdminDtrPage = () => {
   const myRecords = records.filter(r => String(r.user_id) === String(user.id));
   const myTodayRecord = myRecords.find(r => r.date === todayDateStr);
 
-  const displayActiveShift = tableRecords.find(r => (r.am_in && !r.am_out && r.date === todayDateStr) || (r.pm_in && !r.pm_out && r.date === todayDateStr));
+  const isValidTS = (t) => !!(t && !t.includes('1900-01-01'));
+  const displayActiveShift = tableRecords.find(r =>
+    isValidTS(r.am_in) && !isValidTS(r.pm_out) && r.date === todayDateStr
+  );
   const displayTodayRecord = tableRecords.find(r => r.date === todayDateStr);
 
   const currentHour = new Date().getHours();
@@ -609,17 +612,27 @@ const AdminDtrPage = () => {
     else if (type === 'monthly') usersToExport = monthlyExportUsers;
 
     setTimeout(() => {
-      exportPDF(start, end, type, usersToExport);
+      try {
+        exportPDF(start, end, type, usersToExport);
+      } catch (err) {
+        alert("Export error: " + err.message);
+        console.error(err);
+      }
     }, 100);
   };
 
-  const exportWeeklySchedulePDF = (startStr, endStr, usersToExport) => {
+  const exportWeeklySchedulePDF = (startStr, endStr, usersToExport, exportType = 'weekly') => {
     const doc = new jsPDF({ orientation: 'landscape' });
 
     doc.setFontSize(22);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 41, 59);
-    doc.text("Weekly Payroll Report", 148.5, 20, { align: "center" });
+    
+    let reportTitle = "Weekly Payroll Report";
+    if (exportType === 'monthly') reportTitle = "Monthly Payroll Report";
+    else if (exportType === 'yearly') reportTitle = "Yearly Payroll Report";
+
+    doc.text(reportTitle, 148.5, 20, { align: "center" });
 
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
@@ -647,6 +660,7 @@ const AdminDtrPage = () => {
     if (!usersToExport.includes('all')) {
       emps = employees.filter(e => usersToExport.includes(String(e.id)));
     }
+    // No category filter needed for weekly summary, include both Fixed and Timed
 
     emps.forEach(emp => {
       grouped[emp.id] = {
@@ -669,7 +683,7 @@ const AdminDtrPage = () => {
       }
     });
 
-    const tableColumn = ["NAME", "CATEGORY", "WORKED", "RATE", "DEDUCTION", "TOTAL PAY"];
+    const tableColumn = ["NAME", "RATE"];
 
     let grandTotalEarnings = 0;
 
@@ -701,23 +715,11 @@ const AdminDtrPage = () => {
       
       return [
         record.full_name,
-        isFixed ? 'Fixed' : 'Timed',
-        workedStr,
-        rate > 0 ? `$${rate.toFixed(2)}${isFixed ? '/wk' : '/hr'}` : '---',
-        deduction > 0 ? `-$${deduction.toFixed(2)}` : '---',
-        earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
+        isFixed ? (rate > 0 ? `$${rate.toFixed(2)}` : '---') : formatHoursDuration(hrs)
       ];
     });
 
-    // Grand total row
-    tableRows.push([
-      "GRAND TOTAL",
-      "",
-      "",
-      "",
-      "",
-      `$${grandTotalEarnings.toFixed(2)}`
-    ]);
+    // Grand total row removed since rate columns have mixed units
 
     autoTable(doc, {
       head: [tableColumn],
@@ -745,8 +747,12 @@ const AdminDtrPage = () => {
       doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
     }
 
-    doc.save(`Weekly Payroll Summary Report.pdf`);
-    logSystemAction('DOWNLOAD_PAYROLL', 'Admin downloaded Weekly Payroll Summary Report PDF.');
+    let fileName = 'Weekly Payroll Summary Report.pdf';
+    if (exportType === 'monthly') fileName = 'Monthly Payroll Summary Report.pdf';
+    else if (exportType === 'yearly') fileName = 'Yearly Payroll Summary Report.pdf';
+
+    doc.save(fileName);
+    logSystemAction('DOWNLOAD_PAYROLL', `Admin downloaded ${fileName}.`);
   };
 
   const exportFixedReportPDF = (startStr, endStr, category, dateType, dateValue, usersToExport) => {
@@ -767,16 +773,7 @@ const AdminDtrPage = () => {
       return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`;
     };
 
-    let periodStr = "";
-    if (dateType === 'month') {
-      const [y, m] = dateValue.split('-');
-      const d = new Date(y, m - 1);
-      periodStr = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    } else if (dateType === 'week') {
-      periodStr = `Week of ${formatMMDDYYYY(startStr)}`;
-    } else {
-      periodStr = formatMMDDYYYY(startStr);
-    }
+    let periodStr = `${formatMMDDYYYY(startStr)} to ${formatMMDDYYYY(endStr)}`;
 
     doc.text(`Period: ${periodStr}`, 148.5, 28, { align: "center" });
 
@@ -794,6 +791,12 @@ const AdminDtrPage = () => {
     if (!usersToExport.includes('all')) {
       emps = employees.filter(e => usersToExport.includes(String(e.id)));
     }
+    
+    // Filter by Category (Fixed vs Timed)
+    emps = emps.filter(e => {
+      const empType = e.employee_type || 'Timed';
+      return empType === category;
+    });
 
     emps.forEach(emp => {
       grouped[emp.id] = {
@@ -819,8 +822,8 @@ const AdminDtrPage = () => {
     let tableColumn = [];
     if (isFixed) {
       if (pdfColumns.name !== false) tableColumn.push("NAME");
-      if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
       if (pdfColumns.totalRate !== false) tableColumn.push("TOTAL RATE");
+      if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
     } else {
       if (pdfColumns.name !== false) tableColumn.push("NAME");
       tableColumn.push("CATEGORY");
@@ -860,8 +863,8 @@ const AdminDtrPage = () => {
       let row = [];
       if (isFixed) {
         if (pdfColumns.name !== false) row.push(record.full_name);
+        if (pdfColumns.totalRate !== false) row.push(rate > 0 ? `$${rate.toFixed(2)}` : '---');
         if (pdfColumns.daysWorked !== false) row.push(String(days));
-        if (pdfColumns.totalRate !== false) row.push(earnings > 0 ? `$${earnings.toFixed(2)}` : '---');
       } else {
         row = [
           record.full_name,
@@ -1135,10 +1138,15 @@ const AdminDtrPage = () => {
     }
 
     setTimeout(() => {
-      if (fixedReportCategory === 'Time Card') {
-        exportTimeCardPDF(start, end, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
-      } else {
-        exportFixedReportPDF(start, end, fixedReportCategory, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
+      try {
+        if (fixedReportCategory === 'Time Card') {
+          exportTimeCardPDF(start, end, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
+        } else {
+          exportFixedReportPDF(start, end, fixedReportCategory, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
+        }
+      } catch (err) {
+        alert("Export error: " + err.message);
+        console.error(err);
       }
     }, 100);
   };
@@ -1244,8 +1252,8 @@ const AdminDtrPage = () => {
   };
 
   const exportPDF = (customStart = startDate, customEnd = endDate, exportType = 'custom', usersToExport = customExportUsers, category = 'Timed') => {
-    if (exportType === 'weekly') {
-      exportWeeklySchedulePDF(customStart, customEnd, usersToExport);
+    if (exportType === 'weekly' || exportType === 'monthly' || exportType === 'yearly') {
+      exportWeeklySchedulePDF(customStart, customEnd, usersToExport, exportType);
       return;
     }
 
@@ -1286,9 +1294,9 @@ const AdminDtrPage = () => {
     const dataKeys = [];
 
     if (exportType === 'monthly' || exportType === 'yearly') {
-      tableColumn.push("NAME", "TOTAL HRS", "TOTAL PAY");
-      dataKeys.push("full_name", "total_hours", "earnings");
-    } else {
+        tableColumn.push("NAME", "RATE");
+        dataKeys.push("full_name", "rate_display");
+      } else {
       if (pdfColumns.name) { tableColumn.push("NAME"); dataKeys.push("full_name"); }
       tableColumn.push("DATE"); dataKeys.push("date");
 
@@ -1677,7 +1685,11 @@ const AdminDtrPage = () => {
                     <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
                       <label>Employee</label>
                       <MultiSelectDropdown
-                        options={employees}
+                        options={fixedReportCategory === 'Time Card' ? employees : employees.filter(e => {
+                          const eType = e.employee_type || 'Timed';
+                          const cat = fixedReportCategory === 'Timed' ? 'Timed' : 'Fixed';
+                          return eType === cat;
+                        })}
                         selected={fixedReportUsers}
                         onChange={setFixedReportUsers}
                       />
@@ -1701,9 +1713,6 @@ const AdminDtrPage = () => {
                             </>
                           ) : (
                               <>
-                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                  <input type="checkbox" checked={pdfColumns.name} onChange={e => setPdfColumns({ ...pdfColumns, name: e.target.checked })} /> Name
-                                </label>
                                 <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
                                   <input type="checkbox" checked={pdfColumns.totalHrs} onChange={e => setPdfColumns({ ...pdfColumns, totalHrs: e.target.checked })} /> Total Hrs
                                 </label>
@@ -1831,12 +1840,117 @@ const AdminDtrPage = () => {
             <div className="dtr-content-layout">
               <div className="dtr-sidebar">
                 <div className="daily-attendance-summary">
-                  <div className="summary-row">
-                    <span className="summary-label">Logged In:</span>
-                    <span className="summary-value" style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
-                      {displayTodayRecord?.am_in ? formatTime(displayTodayRecord.am_in, displayTodayRecord.date) : '--:--'}
-                    </span>
-                  </div>
+                  {displayUser?.employee_type === 'Fixed' ? (
+                    <div className="summary-row">
+                      <span className="summary-label">Logged In:</span>
+                      <span className="summary-value" style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
+                        {displayTodayRecord?.am_in ? formatTime(displayTodayRecord.am_in, displayTodayRecord.date) : '--:--'}
+                      </span>
+                    </div>
+                  ) : (
+                    <>
+                      {/* ── Work Timer Hero Block ── */}
+                      <div className="dtr-work-hero">
+                        <div className="dtr-work-hero-label">
+                          {displayActiveShift && isValidTS(displayActiveShift.am_out) && !isValidTS(displayActiveShift.pm_in)
+                            ? 'Work Duration (AM — On Lunch)'
+                            : 'Work Duration'}
+                        </div>
+                        <div className="dtr-work-hero-timer">
+                          {displayActiveShift ? (
+                            <ActiveTimer activeShift={displayActiveShift} />
+                          ) : displayTodayRecord?.pm_out ? (
+                            <span style={{ color: 'var(--success)' }}>
+                              {displayTodayRecord.total_hours ? formatHoursDuration(displayTodayRecord.total_hours) : '00:00:00'}
+                            </span>
+                          ) : (
+                            <span className="dtr-work-hero-idle">--:--:--</span>
+                          )}
+                        </div>
+                        {displayTodayRecord?.pm_out && <span className="dtr-status-pill dtr-status-pill--done">&#10003; Shift Complete</span>}
+                        {displayActiveShift && !displayTodayRecord?.pm_out && (() => {
+                          const onLunch = isValidTS(displayActiveShift.am_out) && !isValidTS(displayActiveShift.pm_in);
+                          return onLunch
+                            ? <span className="dtr-status-pill dtr-status-pill--live" style={{ background: 'rgba(245,158,11,0.12)', color: '#d97706', borderColor: 'rgba(245,158,11,0.3)' }}>&#x1F374; On Lunch</span>
+                            : <span className="dtr-status-pill dtr-status-pill--live">&#x25CF; Live</span>;
+                        })()}
+                      </div>
+
+                      {/* ── Shift Block: AM IN → PM OUT ── */}
+                      <div className="dtr-punch-card">
+                        <div className="dtr-punch-card-title">
+                          <span className="dtr-punch-card-dot dtr-punch-card-dot--shift"></span>
+                          AM IN &nbsp;–&nbsp; PM OUT
+                        </div>
+                        <div className="dtr-punch-card-row">
+                          <div className="dtr-punch-entry">
+                            <span className="dtr-punch-tag dtr-punch-tag--in">AM IN</span>
+                            <span className="dtr-punch-time">
+                              {displayTodayRecord?.am_in ? formatTime(displayTodayRecord.am_in, displayTodayRecord.date) : '--:--'}
+                            </span>
+                          </div>
+                          <span className="dtr-punch-arrow">&#8594;</span>
+                          <div className="dtr-punch-entry">
+                            <span className="dtr-punch-tag dtr-punch-tag--out">PM OUT</span>
+                            <span className="dtr-punch-time">
+                              {displayTodayRecord?.pm_out ? formatTime(displayTodayRecord.pm_out, displayTodayRecord.date) : '--:--'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ── Lunch Block: AM OUT → PM IN ── */}
+                      <div className="dtr-punch-card dtr-punch-card--lunch">
+                        <div className="dtr-punch-card-title">
+                          <span className="dtr-punch-card-dot dtr-punch-card-dot--lunch"></span>
+                          AM OUT &nbsp;–&nbsp; PM IN
+                          {/* Deduction pill — shown only when both AM OUT and PM IN are set */}
+                          {(() => {
+                            const amOutStr = displayTodayRecord?.am_out;
+                            const pmInStr = displayTodayRecord?.pm_in;
+                            const validAmOut = amOutStr && !amOutStr.includes('1900-01-01');
+                            const validPmIn = pmInStr && !pmInStr.includes('1900-01-01');
+                            if (!validAmOut || !validPmIn) return null;
+                            const tOut = new Date(amOutStr.includes(' ') ? amOutStr.replace(/-/g, '/') : `${displayTodayRecord.date} ${amOutStr}`.replace(/-/g, '/'));
+                            const tIn = new Date(pmInStr.includes(' ') ? pmInStr.replace(/-/g, '/') : `${displayTodayRecord.date} ${pmInStr}`.replace(/-/g, '/'));
+                            const actualMins = Math.max(0, Math.round((tIn - tOut) / 60000));
+                            const deductMins = Math.max(30, actualMins);
+                            const rounded = deductMins > actualMins;
+                            return (
+                              <span className={`dtr-deduct-pill ${rounded ? 'dtr-deduct-pill--warn' : 'dtr-deduct-pill--ok'}`}>
+                                -{deductMins}m deducted{rounded ? ' *' : ''}
+                              </span>
+                            );
+                          })()}
+                        </div>
+                        <div className="dtr-punch-card-row">
+                          <div className="dtr-punch-entry">
+                            <span className="dtr-punch-tag dtr-punch-tag--lunch-out">AM OUT</span>
+                            <span className="dtr-punch-time">
+                              {(() => {
+                                const v = displayTodayRecord?.am_out;
+                                return (v && !v.includes('1900-01-01')) ? formatTime(v, displayTodayRecord.date) : '--:--';
+                              })()}
+                            </span>
+                          </div>
+                          <span className="dtr-punch-arrow">&#8594;</span>
+                          <div className="dtr-punch-entry">
+                            <span className="dtr-punch-tag dtr-punch-tag--lunch-in">PM IN</span>
+                            <span className="dtr-punch-time">
+                              {(() => {
+                                const amOut = displayTodayRecord?.am_out;
+                                const pmIn = displayTodayRecord?.pm_in;
+                                const validAmOut = amOut && !amOut.includes('1900-01-01');
+                                const validPmIn = pmIn && !pmIn.includes('1900-01-01');
+                                if (validAmOut && !validPmIn) return <span className="dtr-punch-on-lunch">On lunch…</span>;
+                                return validPmIn ? formatTime(pmIn, displayTodayRecord.date) : '--:--';
+                              })()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
                   <div className="summary-row">
                     <span className="summary-label">Date: </span>
                     <span className="summary-value">{new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}</span>
@@ -1948,13 +2062,31 @@ const AdminDtrPage = () => {
                   <thead>
                     <tr>
                       <th rowSpan={2} style={{ width: '60px' }}>DAY</th>
-                      <th colSpan={4} rowSpan={2} style={{ minWidth: '320px', width: '400px', textAlign: 'center' }}>LOG IN RECORD</th>
-                      <th rowSpan={2} style={{ width: '100px' }}>RATE</th>
-                      {isAdmin && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
+                      {displayUser?.employee_type === 'Fixed' ? (
+                        <th colSpan={4} rowSpan={2} style={{ minWidth: '320px', width: '400px', textAlign: 'center' }}>LOG IN RECORD</th>
+                      ) : (
+                        <>
+                          <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>AM</th>
+                          <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>PM</th>
+                        </>
+                      )}
+                      <th rowSpan={2} style={{ width: '100px' }}>
+                        {displayUser?.employee_type === 'Fixed' ? 'RATE' : 'TOTAL HRS'}
+                      </th>
+                      {isAdmin && displayUser?.employee_type !== 'Fixed' && <th rowSpan={2} style={{ width: '100px' }}>RATE/HR</th>}
+                      {isAdmin && displayUser?.employee_type === 'Fixed' && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
                       <th rowSpan={2} style={{ width: '120px' }}>STATUS</th>
                       {isAdmin && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>ACTIONS</th>}
                     </tr>
                     <tr>
+                      {displayUser?.employee_type !== 'Fixed' && (
+                        <>
+                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
+                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
+                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
+                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -2040,13 +2172,33 @@ const AdminDtrPage = () => {
                                       <span>{dayObj.dateStr}</span>
                                     </div>
                                   </td>
-                                <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                  {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
-                                </td>
+                                {displayUser?.employee_type === 'Fixed' ? (
+                                  <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                    {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
+                                  </td>
+                                ) : (
+                                  <>
+                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                      {isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '---')}
+                                    </td>
+                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                      {isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '---')}
+                                    </td>
+                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                      {isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '---')}
+                                    </td>
+                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                      {isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '---')}
+                                    </td>
+                                  </>
+                                )}
                                 <td style={{ fontWeight: 600, color: 'var(--primary)' }}>
-                                  {rate ? `$${rate.toFixed(2)}` : '---'}
+                                  {displayUser?.employee_type === 'Fixed'
+                                    ? (rate ? `$${rate.toFixed(2)}` : '---')
+                                    : ((displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '---')))}
                                 </td>
-                                {isAdmin && (
+                                {isAdmin && displayUser?.employee_type !== 'Fixed' && <td>{rate ? `$${rate.toFixed(2)}` : '---'}</td>}
+                                {isAdmin && displayUser?.employee_type === 'Fixed' && (
                                   <td style={{ fontWeight: 600, color: 'var(--text-main)', textAlign: 'center' }}>
                                     {hrs > 0 ? formatHoursDuration(hrs) : '---'}
                                   </td>
@@ -2079,8 +2231,11 @@ const AdminDtrPage = () => {
                           })}
                           <tr className="grand-total-row">
                             <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
-                            <td style={{ color: 'var(--primary)', fontWeight: 800 }}></td>
-                            {isAdmin && (
+                            <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
+                              {displayUser?.employee_type === 'Fixed' ? '' : (grandTotalHrs > 0 ? formatHoursDuration(grandTotalHrs) : '')}
+                            </td>
+                            {isAdmin && displayUser?.employee_type !== 'Fixed' && <td></td>}
+                            {isAdmin && displayUser?.employee_type === 'Fixed' && (
                               <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
                                 {formatHoursDuration(grandTotalHrs)}
                               </td>
@@ -2116,13 +2271,31 @@ const AdminDtrPage = () => {
                       <thead>
                         <tr>
                           <th rowSpan={2} style={{ width: '60px' }}>DAY</th>
-                          <th colSpan={4} rowSpan={2} style={{ minWidth: '320px', width: '400px', textAlign: 'center' }}>LOG IN RECORD</th>
-                          <th rowSpan={2} style={{ width: '100px' }}>RATE</th>
-                          {isAdmin && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
+                          {emp.employee_type === 'Fixed' ? (
+                            <th colSpan={4} rowSpan={2} style={{ minWidth: '320px', width: '400px', textAlign: 'center' }}>LOG IN RECORD</th>
+                          ) : (
+                            <>
+                              <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>AM</th>
+                              <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>PM</th>
+                            </>
+                          )}
+                          <th rowSpan={2} style={{ width: '100px' }}>
+                            {emp.employee_type === 'Fixed' ? 'RATE' : 'TOTAL HRS'}
+                          </th>
+                          {isAdmin && emp.employee_type !== 'Fixed' && <th rowSpan={2} style={{ width: '100px' }}>RATE/HR</th>}
+                          {isAdmin && emp.employee_type === 'Fixed' && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
                           <th rowSpan={2} style={{ width: '120px' }}>STATUS</th>
                           {isAdmin && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>ACTIONS</th>}
                         </tr>
                         <tr>
+                          {emp.employee_type !== 'Fixed' && (
+                            <>
+                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
+                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
+                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
+                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
+                            </>
+                          )}
                         </tr>
                       </thead>
                       <tbody>
@@ -2195,13 +2368,33 @@ const AdminDtrPage = () => {
                                       <span>{dayObj.dateStr}</span>
                                     </div>
                                   </td>
-                              <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
-                              </td>
+                              {emp.employee_type === 'Fixed' ? (
+                                <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                  {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
+                                </td>
+                              ) : (
+                                <>
+                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                    {isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '---')}
+                                  </td>
+                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                    {isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '---')}
+                                  </td>
+                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                    {isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '---')}
+                                  </td>
+                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                    {isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '---')}
+                                  </td>
+                                </>
+                              )}
                               <td style={{ fontWeight: 600, color: 'var(--primary)' }}>
-                                {rate ? `$${rate.toFixed(2)}` : '---'}
+                                {emp.employee_type === 'Fixed'
+                                  ? (rate ? `$${rate.toFixed(2)}` : '---')
+                                  : ((displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '---')))}
                               </td>
-                              {isAdmin && (
+                              {isAdmin && emp.employee_type !== 'Fixed' && <td>{rate ? `$${rate.toFixed(2)}` : '---'}</td>}
+                              {isAdmin && emp.employee_type === 'Fixed' && (
                                 <td style={{ fontWeight: 600, color: 'var(--text-main)', textAlign: 'center' }}>
                                   {hrs > 0 ? formatHoursDuration(hrs) : '---'}
                                 </td>
@@ -2234,8 +2427,11 @@ const AdminDtrPage = () => {
                         })}
                         <tr className="grand-total-row">
                           <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
-                          <td style={{ color: 'var(--primary)', fontWeight: 800 }}></td>
-                          {isAdmin && (
+                          <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
+                            {emp.employee_type === 'Fixed' ? '' : (grandTotalHrs > 0 ? formatHoursDuration(grandTotalHrs) : '')}
+                          </td>
+                          {isAdmin && emp.employee_type !== 'Fixed' && <td></td>}
+                          {isAdmin && emp.employee_type === 'Fixed' && (
                             <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
                               {formatHoursDuration(grandTotalHrs)}
                             </td>

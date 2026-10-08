@@ -62,7 +62,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
         $user_data = $stmt_user->fetch(PDO::FETCH_ASSOC);
         $rate = $user_data ? ($user_data['employee_type'] === 'Fixed' ? $user_data['weekly_rate'] : $user_data['hourly_rate']) : 0;
         
-        $total_hours = ($action === 'fixed_in') ? 8 : 0;
+        $total_hours = ($action === 'fixed_in') ? 10 : 0;
         $earnings = ($user_data && $user_data['employee_type'] === 'Fixed') ? floatval($rate) : round($total_hours * floatval($rate), 2);
         
         $target_action = ($action === 'fixed_in') ? 'am_in' : $action;
@@ -317,7 +317,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
         $earnings = 0;
         
         if (strcasecmp($status, 'Leave') === 0) {
-            $total_hours = 8;
+            $total_hours = 10;
             $rate = $record['employee_type'] === 'Fixed' ? floatval($record['weekly_rate']) : floatval($record['hourly_rate']);
             $earnings = $record['employee_type'] === 'Fixed' ? $rate : round($total_hours * $rate, 2);
         } elseif (!in_array($status, ['Absent', 'Leave', 'Holiday'])) {
@@ -372,7 +372,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
         $earnings = 0;
 
         if (strcasecmp($status, 'Leave') === 0) {
-            $total_hours = 8;
+            $total_hours = 10;
             $rate = $user['employee_type'] === 'Fixed' ? floatval($user['weekly_rate']) : floatval($user['hourly_rate']);
             $earnings = $user['employee_type'] === 'Fixed' ? $rate : round($total_hours * $rate, 2);
         } elseif (!in_array($status, ['Absent', 'Leave', 'Holiday'])) {

@@ -139,7 +139,7 @@ const FixedDtrPage = () => {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const user = JSON.parse(localStorage.getItem('user'));
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = false; // Admin functions moved to AdminDtrPage
   const [employees, setEmployees] = useState([]);
   const [events, setEvents] = useState([]);
   const [leaveRequests, setLeaveRequests] = useState([]);
@@ -494,8 +494,8 @@ const FixedDtrPage = () => {
       const parts = dtrFilterValue.split('-');
       if (parts.length === 3) {
         const d = new Date(parts[0], parts[1] - 1, parts[2]);
-          const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
-          days.push({ dateStr: dtrFilterValue, dayNum: parseInt(parts[2], 10), dayName });
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        days.push({ dateStr: dtrFilterValue, dayNum: parseInt(parts[2], 10), dayName });
       }
     }
     return days;
@@ -962,209 +962,6 @@ const FixedDtrPage = () => {
         })()
       )}
 
-      {/* Admin Export Panel */}
-      {isAdmin && (
-        <div className="premium-admin-card" style={{ padding: showExportCenter ? '24px 30px' : '16px 30px' }}>
-          <div
-            className="admin-card-header"
-            style={{
-              borderBottom: showExportCenter ? '1px solid var(--glass-border)' : 'none',
-              marginBottom: showExportCenter ? '24px' : '0',
-              paddingBottom: showExportCenter ? '16px' : '0',
-              cursor: 'pointer'
-            }}
-            onClick={() => setShowExportCenter(!showExportCenter)}
-          >
-            <div className="admin-card-title">
-              <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '8px' }}>
-                <Filter size={20} color="var(--primary)" />
-              </div>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)', letterSpacing: '0.5px' }}>Attendance and Payroll Management</h3>
-                {showExportCenter && <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Generate specific reports and payroll records.</p>}
-              </div>
-            </div>
-            <button className="btn btn-ghost" onClick={(e) => { e.stopPropagation(); setShowExportCenter(!showExportCenter); }}>
-              <ChevronDown size={20} style={{ transform: showExportCenter ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s ease' }} />
-            </button>
-          </div>
-
-          {showExportCenter && (
-            <div className="animate-fade-in">
-              <div className="admin-controls-surface" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '16px' }}>
-
-                {/* Monthly Export Row */}
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Select Month</label>
-                    <input
-                      type="month"
-                      className="premium-input"
-                      value={exportMonth}
-                      onChange={e => setExportMonth(e.target.value)}
-                    />
-                  </div>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Employee</label>
-                    <MultiSelectDropdown
-                      options={employees}
-                      selected={monthlyExportUsers}
-                      onChange={setMonthlyExportUsers}
-                    />
-                  </div>
-                  <button className="btn btn-primary" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={() => handlePresetExport('monthly')}>
-                    <Download size={16} /> Monthly PDF Export
-                  </button>
-                </div>
-
-                {/* Weekly Export Row */}
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Select Week</label>
-                    <CustomWeekPicker
-                      value={exportWeekStr}
-                      onChange={val => setExportWeekStr(val)}
-                    />
-                  </div>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Employee</label>
-                    <MultiSelectDropdown
-                      options={employees}
-                      selected={weeklyExportUsers}
-                      onChange={setWeeklyExportUsers}
-                    />
-                  </div>
-                  <button className="btn btn-primary" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={() => handlePresetExport('weekly')}>
-                    <Download size={16} /> Weekly PDF Export
-                  </button>
-                </div>
-
-                {/* Yearly Export Row */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Annual Report</label>
-                    <p style={{ margin: '6px 0 0 0', fontSize: '0.9rem', color: 'var(--text-main)' }}>Generate a comprehensive report for the entire previous year automatically.</p>
-                  </div>
-                  <button className="btn btn-outline" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={() => handlePresetExport('yearly')}>
-                    <Download size={16} /> Yearly PDF Export
-                  </button>
-                </div>
-
-                {/* Fixed Report Salary Row */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
-                  <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-main)' }}>Report Salary</div>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '120px' }}>
-                      <label>Category</label>
-                      <select className="premium-input" value={fixedReportCategory} onChange={e => setFixedReportCategory(e.target.value)}>
-                        <option value="Timed">Report Salary - Timed</option>
-                        <option value="Fixed">Report Salary - Fixed</option>
-                        <option value="Time Card">Time Card</option>
-                      </select>
-                    </div>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '120px' }}>
-                      <label>Period Type</label>
-                      <select className="premium-input" value={fixedReportDateType} onChange={(e) => {
-                        const type = e.target.value;
-                        setFixedReportDateType(type);
-                        const today = new Date();
-                        if (type === 'month') {
-                          setFixedReportDateValue(today.toISOString().slice(0, 7));
-                        } else if (type === 'day') {
-                          setFixedReportDateValue(getLocalDateStr(today));
-                        } else if (type === 'week') {
-                          const dayOfWeek = today.getDay();
-                          const diff = (dayOfWeek + 7 - 4) % 7;
-                          const start = new Date(today);
-                          start.setDate(today.getDate() - diff);
-                          setFixedReportDateValue(getLocalDateStr(start));
-                        }
-                      }}>
-                        <option value="month">Specific Month</option>
-                        <option value="week">Specific Week</option>
-                        <option value="day">Specific Day</option>
-                      </select>
-                    </div>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                      <label>Select Period</label>
-                      {fixedReportDateType === 'week' ? (
-                        <CustomWeekPicker value={fixedReportDateValue} onChange={val => setFixedReportDateValue(val)} />
-                      ) : (
-                        <input
-                          type={fixedReportDateType === 'day' ? 'date' : 'month'}
-                          className="premium-input"
-                          value={fixedReportDateValue}
-                          onChange={e => setFixedReportDateValue(e.target.value)}
-                        />
-                      )}
-                    </div>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                      <label>Employee</label>
-                      <MultiSelectDropdown
-                        options={employees}
-                        selected={fixedReportUsers}
-                        onChange={setFixedReportUsers}
-                      />
-                    </div>
-
-                    {fixedReportCategory !== 'Time Card' && (
-                      <div style={{ width: '100%', marginTop: '16px' }}>
-                        <h4 style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '0.9rem' }}>Include Columns:</h4>
-                        <div className="checkbox-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '12px' }}>
-                          <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                            <input type="checkbox" checked={pdfColumns.name} onChange={e => setPdfColumns({ ...pdfColumns, name: e.target.checked })} /> Name
-                          </label>
-                          {fixedReportCategory === 'Fixed' ? (
-                            <>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.daysWorked !== false} onChange={e => setPdfColumns({ ...pdfColumns, daysWorked: e.target.checked })} /> Days Worked
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.totalRate !== false} onChange={e => setPdfColumns({ ...pdfColumns, totalRate: e.target.checked })} /> Total Rate
-                              </label>
-                            </>
-                          ) : (
-                            <>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.totalHrs} onChange={e => setPdfColumns({ ...pdfColumns, totalHrs: e.target.checked })} /> Total Hrs
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.rate} onChange={e => setPdfColumns({ ...pdfColumns, rate: e.target.checked })} /> Rate
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.amIn} onChange={e => setPdfColumns({ ...pdfColumns, amIn: e.target.checked })} /> AM In
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.amOut} onChange={e => setPdfColumns({ ...pdfColumns, amOut: e.target.checked })} /> AM Out
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.pmIn} onChange={e => setPdfColumns({ ...pdfColumns, pmIn: e.target.checked })} /> PM In
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.pmOut} onChange={e => setPdfColumns({ ...pdfColumns, pmOut: e.target.checked })} /> PM Out
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.earnings} onChange={e => setPdfColumns({ ...pdfColumns, earnings: e.target.checked })} /> Total Pay
-                              </label>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <button className="btn btn-primary" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={handleFixedReportExport}>
-                      <Download size={16} /> Export PDF
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-
-            </div>
-          )}
-        </div>
-      )}
-
       {/* New Design: Details and Record */}
       <div className="dtr-new-design-container">
         <div className="premium-dtr-toolbar">
@@ -1212,7 +1009,7 @@ const FixedDtrPage = () => {
               </button>
             </div>
 
-            
+
           </div>
 
           {!isAdmin && (
@@ -1432,12 +1229,12 @@ const FixedDtrPage = () => {
 
                             return (
                               <tr key={dayObj.dateStr}>
-                                                                <td className="dtr-day-col" style={{ width: '120px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
-                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
-                                      <span>{dayObj.dateStr}</span>
-                                    </div>
-                                  </td>
+                                <td className="dtr-day-col" style={{ width: '120px' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
+                                    <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
+                                    <span>{dayObj.dateStr}</span>
+                                  </div>
+                                </td>
                                 <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                   {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
                                 </td>
@@ -1585,12 +1382,12 @@ const FixedDtrPage = () => {
 
                           return (
                             <tr key={`${emp.id}-${dayObj.dateStr}`}>
-                                                              <td className="dtr-day-col" style={{ width: '120px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
-                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
-                                      <span>{dayObj.dateStr}</span>
-                                    </div>
-                                  </td>
+                              <td className="dtr-day-col" style={{ width: '120px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
+                                  <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
+                                  <span>{dayObj.dateStr}</span>
+                                </div>
+                              </td>
                               <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
                                 {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
                               </td>

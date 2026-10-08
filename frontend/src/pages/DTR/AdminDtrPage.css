@@ -876,3 +876,197 @@
   opacity: 0.25;
 }
 
+/* =========================================================
+   DTR TIMED SIDEBAR - PREMIUM REDESIGN
+   ========================================================= */
+
+/* Work Duration Hero */
+.dtr-work-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(139,92,246,0.08) 100%);
+  border: 1px solid rgba(59,130,246,0.15);
+  border-radius: 12px;
+  padding: 14px 12px 12px;
+  text-align: center;
+}
+
+[data-theme="dark"] .dtr-work-hero {
+  background: linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(139,92,246,0.12) 100%);
+  border-color: rgba(59,130,246,0.2);
+}
+
+.dtr-work-hero-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.dtr-work-hero-timer {
+  font-size: 1.55rem;
+  font-weight: 800;
+  font-family: 'Courier New', monospace;
+  color: var(--primary);
+  line-height: 1.1;
+}
+
+.dtr-work-hero-idle {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 1.3rem;
+}
+
+.dtr-status-pill {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.dtr-status-pill--done {
+  background: rgba(16,185,129,0.12);
+  color: #059669;
+  border: 1px solid rgba(16,185,129,0.3);
+}
+
+.dtr-status-pill--live {
+  background: rgba(239,68,68,0.1);
+  color: #dc2626;
+  border: 1px solid rgba(239,68,68,0.25);
+  animation: dtr-live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dtr-live-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* Punch Cards */
+.dtr-punch-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid rgba(226,232,240,0.9);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+[data-theme="dark"] .dtr-punch-card {
+  background: rgba(30,41,59,0.5);
+  border-color: rgba(255,255,255,0.07);
+}
+
+.dtr-punch-card--lunch {
+  border-color: rgba(245,158,11,0.3);
+  background: rgba(245,158,11,0.03);
+}
+
+[data-theme="dark"] .dtr-punch-card--lunch {
+  border-color: rgba(245,158,11,0.2);
+  background: rgba(245,158,11,0.06);
+}
+
+.dtr-punch-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+}
+
+.dtr-punch-card-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dtr-punch-card-dot--shift { background: #3b82f6; }
+.dtr-punch-card-dot--lunch { background: #f59e0b; }
+
+.dtr-punch-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.dtr-punch-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+}
+
+.dtr-punch-arrow {
+  font-size: 1rem;
+  color: var(--text-muted);
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
+.dtr-punch-time {
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.dtr-punch-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.dtr-punch-tag--in        { background: rgba(59,130,246,0.12);  color: #2563eb; }
+.dtr-punch-tag--out       { background: rgba(239,68,68,0.1);    color: #dc2626; }
+.dtr-punch-tag--lunch-out { background: rgba(249,115,22,0.12);  color: #ea580c; }
+.dtr-punch-tag--lunch-in  { background: rgba(16,185,129,0.12);  color: #059669; }
+
+.dtr-punch-on-lunch {
+  color: #f59e0b;
+  font-weight: 700;
+  font-size: 0.75rem;
+  animation: dtr-live-pulse 1.4s ease-in-out infinite;
+}
+
+.dtr-deduct-pill {
+  margin-left: auto;
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.dtr-deduct-pill--ok {
+  background: rgba(16,185,129,0.12);
+  color: #059669;
+  border: 1px solid rgba(16,185,129,0.25);
+}
+
+.dtr-deduct-pill--warn {
+  background: rgba(245,158,11,0.12);
+  color: #d97706;
+  border: 1px solid rgba(245,158,11,0.3);
+}
