@@ -778,7 +778,66 @@
   max-width: 450px;
   padding: 24px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: max-width 0.2s ease;
+}
+
+.dtr-modal-content.dtr-modal-fixed {
+  max-width: 480px;
+}
+
+.dtr-modal-content.dtr-modal-timed {
+  max-width: 540px;
+}
+
+.dtr-modal-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dtr-modal-type-badge--timed {
+  background: rgba(99, 102, 241, 0.12);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+
+.dtr-modal-type-badge--fixed {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.dtr-modal-punch-card {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid var(--card-border, #e2e8f0);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+[data-theme="dark"] .dtr-modal-punch-card {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--card-border, rgba(255, 255, 255, 0.1));
+}
+
+.mispunch-input {
+  background: rgba(0, 0, 0, 0.04) !important;
+  color: var(--text-muted) !important;
+  border-style: dashed !important;
+  cursor: not-allowed;
+}
+
+[data-theme="dark"] .mispunch-input {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: var(--text-muted) !important;
 }
 
 [data-theme="light"] .dtr-modal-content {

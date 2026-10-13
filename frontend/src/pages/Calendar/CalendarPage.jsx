@@ -1318,11 +1318,17 @@ const CalendarPage = () => {
               <table className="admin-week-table">
                 <thead>
                   <tr>
-                    <th style={{ width: '220px', textAlign: 'left', paddingLeft: '16px' }}>EMPLOYEE</th>
+                    <th style={{ width: '220px', minWidth: '220px', textAlign: 'left', paddingLeft: '16px' }}>EMPLOYEE</th>
                     {weekCells.map((cell, idx) => {
                       const isToday = new Date().toDateString() === cell.date.toDateString();
+
                       return (
-                        <th key={idx} className={isToday ? 'today-col' : ''}>
+                        <th
+                          key={idx}
+                          className={isToday ? 'today-col' : ''}
+                          onClick={() => { setSelectedDateForModal(cell.date); setShowDayModal(true); }}
+                          style={{ cursor: 'pointer' }}
+                        >
                           <div style={{ textTransform: 'uppercase', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
                             {cell.date.toLocaleString('default', { weekday: 'short' })}
                           </div>
@@ -1335,6 +1341,45 @@ const CalendarPage = () => {
                   </tr>
                 </thead>
                 <tbody>
+                  {weekCells.some(cell => {
+                    const ds = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
+                    return holidays.some(h => h.holiday_date === ds) || displayedEvents.some(e => e.event_date?.split(' ')[0] === ds && (e.event_type === 'Holiday' || e.event_type === 'HL' || e.event_type === 'holiday'));
+                  }) && (
+                    <tr className="holidays-row">
+                      <td style={{ textAlign: 'left', paddingLeft: '16px' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>Holiday</div>
+                      </td>
+                      {weekCells.map((cell, idx) => {
+                        const cellDateStr = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
+                        const dayHolidays = holidays.filter(h => h.holiday_date === cellDateStr);
+                        const eventHolidays = displayedEvents.filter(e =>
+                          e.event_date &&
+                          e.event_date.split(' ')[0] === cellDateStr &&
+                          (e.event_type === 'Holiday' || e.event_type === 'HL' || e.event_type === 'holiday') &&
+                          !dayHolidays.some(dh => dh.name.toLowerCase() === e.title.toLowerCase())
+                        ).map(e => ({ id: `evt-${e.id}`, name: e.title }));
+                        const allDayHolidays = [...dayHolidays, ...eventHolidays];
+                        const isToday = new Date().toDateString() === cell.date.toDateString();
+
+                        return (
+                          <td key={idx} className={`admin-week-cell ${isToday ? 'today-cell' : ''}`} onClick={() => { setSelectedDateForModal(cell.date); setShowDayModal(true); }}>
+                            <div className="admin-cell-events">
+                              {allDayHolidays.map(h => (
+                                <div
+                                  key={h.id}
+                                  className="event-badge week-event-badge event-type-holiday"
+                                  title={h.name}
+                                >
+                                  <span className="event-icon">🎄</span>
+                                  <span className="event-text">{h.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  )}
 
                   {employees.map(emp => (
                     <tr key={emp.id} className="employee-row">
@@ -1344,38 +1389,19 @@ const CalendarPage = () => {
                       </td>
                       {weekCells.map((cell, idx) => {
                         const cellDateStr = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
-
-                        const dayHolidays = holidays
-                          .filter(h => h.holiday_date === cellDateStr)
-                          .map(h => ({
-                            id: `holiday-${h.id}`,
-                            _isHoliday: true,
-                            title: h.name,
-                            event_type: 'holiday',
-                            status: 'approved',
-                            user_name: 'US Holiday'
-                          }));
+                        const isHolidayDate = holidays.some(h => h.holiday_date === cellDateStr);
 
                         const dayEvents = displayedEvents.filter(e => {
                           if (!e.event_date) return false;
                           const dateMatch = e.event_date.split(' ')[0] === cellDateStr;
-                          return dateMatch && String(e.user_id) === String(emp.id);
+                          return dateMatch && String(e.user_id) === String(emp.id) && e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'holiday';
                         });
 
-                        const combinedEvents = [...dayHolidays, ...dayEvents];
                         const isToday = new Date().toDateString() === cell.date.toDateString();
                         return (
-                          <td key={idx} className={`admin-week-cell ${isToday ? 'today-cell' : ''}`} onClick={() => { setSelectedDateForModal(cell.date); setShowDayModal(true); }}>
+                          <td key={idx} className={`admin-week-cell ${isToday ? 'today-cell' : ''} ${isHolidayDate ? 'holiday-cell' : ''}`} onClick={() => { setSelectedDateForModal(cell.date); setShowDayModal(true); }}>
                             <div className="admin-cell-events">
-                              {combinedEvents.map(item => {
-                                if (item._isHoliday) {
-                                  return (
-                                    <div key={item.id} className="event-badge week-event-badge event-type-holiday" title={item.title}>
-                                      <span className="event-icon">🎄</span>
-                                      <span className="event-text">{item.title}</span>
-                                    </div>
-                                  );
-                                }
+                              {dayEvents.map(item => {
                                 const Icon = getEventIcon(item);
                                 return (
                                   <div

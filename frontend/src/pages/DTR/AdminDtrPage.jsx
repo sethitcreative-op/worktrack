@@ -156,11 +156,14 @@ const AdminDtrPage = () => {
   // Helper: format DATETIME or HH:MM:SS string to 12-hour format
   const formatTime = (datetimeStr, recordDate) => {
     if (!datetimeStr) return '--:--';
-    if (datetimeStr.includes('1900-01-01')) return '-- -- --';
+    const str = String(datetimeStr).trim();
+    if (str.includes('1900-01-01') || str.includes('0000-00-00')) return '-- -- --';
     // Split by space to get time part if it's a datetime
-    const [datePart, timePart] = datetimeStr.includes(' ') ? datetimeStr.split(' ') : [null, datetimeStr];
+    const [datePart, timePart] = str.includes(' ') ? str.split(' ') : [null, str];
+    if (!timePart || !timePart.includes(':')) return '--:--';
     const [hours, minutes] = timePart.split(':');
     const h = parseInt(hours, 10);
+    if (isNaN(h)) return '--:--';
     const period = h >= 12 ? 'PM' : 'AM';
     const h12 = h % 12 || 12;
     let result = `${String(h12).padStart(2, '0')}:${minutes} ${period}`;
@@ -237,13 +240,16 @@ const AdminDtrPage = () => {
     mode: 'edit', // 'edit' or 'add'
     recordId: null,
     targetUserId: null,
+    employeeType: 'Timed',
+    employeeName: '',
     dateStr: '',
     amIn: '',
     amOut: '',
     pmIn: '',
     pmOut: '',
     totalHours: '',
-    status: 'Present'
+    status: 'Present',
+    isCustomHours: false
   });
 
   const handleFilterTypeChange = (e) => {
@@ -348,20 +354,74 @@ const AdminDtrPage = () => {
     return `${hours}:${minutes}:${seconds}`;
   };
 
-  const openEditModal = (record, dayObj, targetUserId) => {
+  // Helper to extract time string (HH:MM:SS) or detect mispunch
+  const parseTimeOrMispunch = (val) => {
+    if (!val) return '';
+    if (val.includes('1900-01-01')) return '-- -- --';
+    return val.includes(' ') ? val.split(' ')[1] : val;
+  };
+
+  // Helper to calculate total hours for timed employees matching backend rules
+  const calculateTimedTotalHours = (amIn, amOut, pmIn, pmOut, dateStr = '2026-01-01') => {
+    if (!amIn || !pmOut || amIn === '-- -- --' || pmOut === '-- -- --') {
+      return 0;
+    }
+    const tAmIn = new Date(`${dateStr}T${amIn.length === 5 ? amIn + ':00' : amIn}`);
+    const tPmOut = new Date(`${dateStr}T${pmOut.length === 5 ? pmOut + ':00' : pmOut}`);
+    if (isNaN(tAmIn.getTime()) || isNaN(tPmOut.getTime())) {
+      return 0;
+    }
+    const grossHours = Math.max(0, (tPmOut - tAmIn) / (1000 * 3600));
+    let deductionHours = 0;
+    const hasAmOut = amOut && amOut !== '-- -- --';
+    const hasPmIn = pmIn && pmIn !== '-- -- --';
+    if (hasAmOut && hasPmIn) {
+      const tAmOut = new Date(`${dateStr}T${amOut.length === 5 ? amOut + ':00' : amOut}`);
+      const tPmIn = new Date(`${dateStr}T${pmIn.length === 5 ? pmIn + ':00' : pmIn}`);
+      if (!isNaN(tAmOut.getTime()) && !isNaN(tPmIn.getTime())) {
+        const lunchHours = Math.max(0, (tPmIn - tAmOut) / (1000 * 3600));
+        deductionHours = Math.max(0.5, lunchHours);
+      }
+    } else {
+      if (grossHours > 6) {
+        deductionHours = 1.0;
+      }
+    }
+    return Math.round(Math.max(0, grossHours - deductionHours) * 100) / 100;
+  };
+
+  const openEditModal = (record, dayObj, targetUserId, targetEmployee = null) => {
+    const targetUser = targetEmployee
+      || employees.find(e => String(e.id) === String(targetUserId))
+      || (displayUser && String(displayUser.id) === String(targetUserId) ? displayUser : null);
+
+    const empType = targetUser?.employee_type || record?.employee_type || 'Timed';
+    const empName = targetUser?.full_name || record?.full_name || 'Employee';
+
     if (record) {
+      const amInVal = parseTimeOrMispunch(record.am_in);
+      const amOutVal = parseTimeOrMispunch(record.am_out);
+      const pmInVal = parseTimeOrMispunch(record.pm_in);
+      const pmOutVal = parseTimeOrMispunch(record.pm_out);
+      const existingHours = record.total_hours !== null && record.total_hours !== undefined && record.total_hours !== ''
+        ? String(record.total_hours)
+        : '';
+
       setEditModal({
         isOpen: true,
         mode: 'edit',
         recordId: record.id,
         targetUserId: record.user_id,
+        employeeType: empType,
+        employeeName: empName,
         dateStr: record.date,
-        amIn: record.am_in ? (record.am_in.includes('1900-01-01') ? '-- -- --' : record.am_in.split(' ')[1]) : '',
-        amOut: record.am_out ? (record.am_out.includes('1900-01-01') ? '-- -- --' : record.am_out.split(' ')[1]) : '',
-        pmIn: record.pm_in ? (record.pm_in.includes('1900-01-01') ? '-- -- --' : record.pm_in.split(' ')[1]) : '',
-        pmOut: record.pm_out ? (record.pm_out.includes('1900-01-01') ? '-- -- --' : record.pm_out.split(' ')[1]) : '',
-        totalHours: record.total_hours !== null && record.total_hours !== undefined ? String(record.total_hours) : '',
-        status: record.status || 'Present'
+        amIn: amInVal,
+        amOut: amOutVal,
+        pmIn: pmInVal,
+        pmOut: pmOutVal,
+        totalHours: existingHours || (empType === 'Fixed' ? '10' : ''),
+        status: record.status || 'Present',
+        isCustomHours: !!existingHours
       });
     } else {
       setEditModal({
@@ -369,23 +429,64 @@ const AdminDtrPage = () => {
         mode: 'add',
         recordId: null,
         targetUserId: targetUserId,
+        employeeType: empType,
+        employeeName: empName,
         dateStr: dayObj.dateStr,
         amIn: '',
         amOut: '',
         pmIn: '',
         pmOut: '',
-        totalHours: '',
-        status: 'Present'
+        totalHours: empType === 'Fixed' ? '10' : '',
+        status: 'Present',
+        isCustomHours: false
       });
     }
   };
 
   const handleSaveModal = async () => {
     try {
-      const amInDate = editModal.amIn === '-- -- --' ? '1900-01-01 00:00:00' : (editModal.amIn ? `${editModal.dateStr} ${editModal.amIn}` : '');
-      const amOutDate = editModal.amOut === '-- -- --' ? '1900-01-01 00:00:00' : (editModal.amOut ? `${editModal.dateStr} ${editModal.amOut}` : '');
-      const pmInDate = editModal.pmIn === '-- -- --' ? '1900-01-01 00:00:00' : (editModal.pmIn ? `${editModal.dateStr} ${editModal.pmIn}` : '');
-      const pmOutDate = editModal.pmOut === '-- -- --' ? '1900-01-01 00:00:00' : (editModal.pmOut ? `${editModal.dateStr} ${editModal.pmOut}` : '');
+      const isFixed = editModal.employeeType === 'Fixed';
+      const isSpecialStatus = ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(editModal.status);
+
+      let amInDate = '';
+      let amOutDate = '';
+      let pmInDate = '';
+      let pmOutDate = '';
+      let totalHoursVal = editModal.totalHours;
+
+      if (isSpecialStatus) {
+        amInDate = '';
+        amOutDate = '';
+        pmInDate = '';
+        pmOutDate = '';
+        if (editModal.status === 'Leave') {
+          totalHoursVal = '10';
+        } else {
+          totalHoursVal = '0';
+        }
+      } else if (isFixed) {
+        amInDate = editModal.amIn === '-- -- --'
+          ? '1900-01-01 00:00:00'
+          : (editModal.amIn ? `${editModal.dateStr} ${editModal.amIn}` : '');
+        amOutDate = '';
+        pmInDate = '';
+        pmOutDate = '';
+        totalHoursVal = editModal.totalHours || '10';
+      } else {
+        amInDate = editModal.amIn === '-- -- --'
+          ? '1900-01-01 00:00:00'
+          : (editModal.amIn ? `${editModal.dateStr} ${editModal.amIn}` : '');
+        amOutDate = editModal.amOut === '-- -- --'
+          ? '1900-01-01 00:00:00'
+          : (editModal.amOut ? `${editModal.dateStr} ${editModal.amOut}` : '');
+        pmInDate = editModal.pmIn === '-- -- --'
+          ? '1900-01-01 00:00:00'
+          : (editModal.pmIn ? `${editModal.dateStr} ${editModal.pmIn}` : '');
+        pmOutDate = editModal.pmOut === '-- -- --'
+          ? '1900-01-01 00:00:00'
+          : (editModal.pmOut ? `${editModal.dateStr} ${editModal.pmOut}` : '');
+        totalHoursVal = editModal.totalHours;
+      }
 
       const payload = {
         action: editModal.mode === 'edit' ? 'edit_record' : 'add_record',
@@ -397,8 +498,8 @@ const AdminDtrPage = () => {
         am_out: amOutDate,
         pm_in: pmInDate,
         pm_out: pmOutDate,
-        total_hours: editModal.totalHours,
-        status: editModal.status === 'Missing Timeout' ? 'Present' : editModal.status
+        total_hours: totalHoursVal,
+        status: editModal.status
       };
 
       const res = await axios.post(`${API_BASE}/dtr.php`, payload);
@@ -2211,7 +2312,7 @@ const AdminDtrPage = () => {
                                     <div className="dtr-action-icons" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                                       {row ? (
                                         <>
-                                          <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
+                                          <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId, displayUser)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
                                             <Edit size={16} />
                                           </button>
                                           <button className="btn-icon text-danger" onClick={() => handleDeleteRecord(row.id)} title="Delete Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}>
@@ -2219,7 +2320,7 @@ const AdminDtrPage = () => {
                                           </button>
                                         </>
                                       ) : (
-                                        <button onClick={() => openEditModal(null, dayObj, targetUserId)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
+                                        <button onClick={() => openEditModal(null, dayObj, targetUserId, displayUser)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
                                           <Plus size={14} /> Add
                                         </button>
                                       )}
@@ -2407,7 +2508,7 @@ const AdminDtrPage = () => {
                                   <div className="dtr-action-icons" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                                     {row ? (
                                       <>
-                                        <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
+                                        <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId, emp)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
                                           <Edit size={16} />
                                         </button>
                                         <button className="btn-icon text-danger" onClick={() => handleDeleteRecord(row.id)} title="Delete Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}>
@@ -2415,7 +2516,7 @@ const AdminDtrPage = () => {
                                         </button>
                                       </>
                                     ) : (
-                                      <button onClick={() => openEditModal(null, dayObj, targetUserId)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
+                                      <button onClick={() => openEditModal(null, dayObj, targetUserId, emp)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
                                         <Plus size={14} /> Add
                                       </button>
                                     )}
@@ -2450,52 +2551,397 @@ const AdminDtrPage = () => {
       </div>
 
       {/* Admin Edit/Add Modal */}
-      {editModal.isOpen && (
-        <div className="dtr-modal-overlay">
-          <div className="dtr-modal-content">
-            <div className="dtr-modal-header">
-              <h3 style={{ margin: 0, fontSize: '1.25rem', color: 'var(--text-main)' }}>
-                {editModal.mode === 'edit' ? 'Edit Record' : 'Add Record'} - {editModal.dateStr}
-              </h3>
-              <button className="btn-icon" onClick={() => setEditModal({ ...editModal, isOpen: false })} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
-                <X size={24} />
-              </button>
+      {editModal.isOpen && (() => {
+        const isFixed = editModal.employeeType === 'Fixed';
+        const isSpecialStatus = ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(editModal.status);
+        const calcHours = !isFixed
+          ? calculateTimedTotalHours(editModal.amIn, editModal.amOut, editModal.pmIn, editModal.pmOut, editModal.dateStr)
+          : (parseFloat(editModal.totalHours) || 0);
+
+        return (
+          <div className="dtr-modal-overlay">
+            <div className={`dtr-modal-content ${isFixed ? 'dtr-modal-fixed' : 'dtr-modal-timed'}`}>
+              <div className="dtr-modal-header">
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.25rem', color: 'var(--text-main)', fontWeight: 700 }}>
+                      {editModal.mode === 'edit' ? 'Edit Record' : 'Add Record'}
+                    </h3>
+                    <span className={`dtr-modal-type-badge ${isFixed ? 'dtr-modal-type-badge--fixed' : 'dtr-modal-type-badge--timed'}`}>
+                      {isFixed ? 'Fixed Employee' : 'Timed Employee'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    <strong>{editModal.employeeName}</strong> &bull; {editModal.dateStr}
+                  </div>
+                </div>
+                <button
+                  className="btn-icon"
+                  type="button"
+                  onClick={() => setEditModal({ ...editModal, isOpen: false })}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                >
+                  <X size={22} />
+                </button>
+              </div>
+
+              <form onSubmit={(e) => { e.preventDefault(); handleSaveModal(); }}>
+                <div className="dtr-modal-body" style={{ padding: '20px 0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Status Selection */}
+                  <div className="premium-select-group">
+                    <label style={{ fontWeight: 600 }}>Status</label>
+                    <select
+                      className="premium-input"
+                      value={editModal.status}
+                      onChange={(e) => {
+                        const newStatus = e.target.value;
+                        setEditModal({
+                          ...editModal,
+                          status: newStatus,
+                          totalHours: newStatus === 'Leave' ? '10' : (newStatus === 'Absent' || newStatus === 'Holiday' || newStatus === 'Rescheduled' ? '0' : editModal.totalHours)
+                        });
+                      }}
+                    >
+                      <option value="Present">Present</option>
+                      <option value="Absent">Absent</option>
+                      <option value="Leave">Leave</option>
+                      <option value="Holiday">Holiday</option>
+                      <option value="Rescheduled">Rescheduled</option>
+                      {!isFixed && <option value="Missing Timeout">Missing Timeout</option>}
+                    </select>
+                  </div>
+
+                  {isSpecialStatus && (
+                    <div style={{
+                      padding: '12px 14px',
+                      borderRadius: '8px',
+                      background: editModal.status === 'Absent' ? 'rgba(239, 68, 68, 0.08)' : (editModal.status === 'Rescheduled' ? 'rgba(245, 158, 11, 0.08)' : 'rgba(99, 102, 241, 0.08)'),
+                      border: `1px solid ${editModal.status === 'Absent' ? 'rgba(239, 68, 68, 0.2)' : (editModal.status === 'Rescheduled' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(99, 102, 241, 0.2)')}`,
+                      fontSize: '0.85rem',
+                      color: editModal.status === 'Absent' ? 'var(--danger)' : (editModal.status === 'Rescheduled' ? 'var(--warning, #d97706)' : 'var(--primary)')
+                    }}>
+                      {editModal.status === 'Leave' && 'Marked as Leave (10 hours default applied). Time punches are not required.'}
+                      {editModal.status === 'Absent' && 'Marked as Absent (0 hours). Time punches will be cleared upon saving.'}
+                      {editModal.status === 'Holiday' && 'Marked as Holiday (0 hours). Time punches will be cleared upon saving.'}
+                      {editModal.status === 'Rescheduled' && 'Marked as Rescheduled. Time punches will be cleared upon saving.'}
+                    </div>
+                  )}
+
+                  {/* ───────────────────────────────────────────────────────── */}
+                  {/* FIXED EMPLOYEE FORMAT                                     */}
+                  {/* ───────────────────────────────────────────────────────── */}
+                  {isFixed ? (
+                    <div style={{ display: 'flex', gap: '16px' }}>
+                      <div className="premium-select-group" style={{ flex: 1 }}>
+                        <label style={{ fontWeight: 600, marginBottom: '6px' }}>Log In Time</label>
+                        <input
+                          type="time"
+                          step="1"
+                          className="premium-input"
+                          style={{ width: '100%' }}
+                          value={editModal.amIn !== '-- -- --' ? editModal.amIn : ''}
+                          onChange={(e) => setEditModal({ ...editModal, amIn: e.target.value })}
+                          disabled={isSpecialStatus}
+                        />
+                      </div>
+                      <div className="premium-select-group" style={{ flex: 1 }}>
+                        <label style={{ fontWeight: 600, marginBottom: '6px' }}>Total Hours</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="premium-input"
+                          style={{ width: '100%' }}
+                          value={editModal.totalHours}
+                          onChange={(e) => setEditModal({ ...editModal, totalHours: e.target.value })}
+                          disabled={isSpecialStatus}
+                          placeholder="10.00"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    /* ───────────────────────────────────────────────────────── */
+                    /* TIMED EMPLOYEE FORMAT                                     */
+                    /* ───────────────────────────────────────────────────────── */
+                    <>
+                      {/* AM Block (Morning / Lunch Out) */}
+                      <div className="dtr-modal-punch-card">
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+                          Morning Shift (AM)
+                        </div>
+                        <div style={{ display: 'flex', gap: '14px' }}>
+                          {/* AM IN */}
+                          <div className="premium-select-group" style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                              <label style={{ margin: 0, fontWeight: 600, fontSize: '0.85rem' }}>AM IN</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', cursor: isSpecialStatus ? 'default' : 'pointer', margin: 0, fontWeight: '500', color: editModal.amIn === '-- -- --' ? 'var(--warning, #f59e0b)' : 'var(--text-muted)' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={editModal.amIn === '-- -- --'}
+                                  onChange={(e) => {
+                                    const val = e.target.checked ? '-- -- --' : '';
+                                    const newCalculated = calculateTimedTotalHours(val, editModal.amOut, editModal.pmIn, editModal.pmOut, editModal.dateStr);
+                                    setEditModal({
+                                      ...editModal,
+                                      amIn: val,
+                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    });
+                                  }}
+                                  disabled={isSpecialStatus}
+                                />
+                                Mispunch
+                              </label>
+                            </div>
+                            {editModal.amIn === '-- -- --' ? (
+                              <input type="text" className="premium-input mispunch-input" value="-- -- --" disabled style={{ width: '100%', color: 'var(--text-muted)', textAlign: 'center', letterSpacing: '2px', fontWeight: 700 }} />
+                            ) : (
+                              <input
+                                type="time"
+                                step="1"
+                                className="premium-input"
+                                style={{ width: '100%' }}
+                                value={editModal.amIn}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const newCalculated = calculateTimedTotalHours(val, editModal.amOut, editModal.pmIn, editModal.pmOut, editModal.dateStr);
+                                  setEditModal({
+                                    ...editModal,
+                                    amIn: val,
+                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                  });
+                                }}
+                                disabled={isSpecialStatus}
+                              />
+                            )}
+                          </div>
+
+                          {/* AM OUT */}
+                          <div className="premium-select-group" style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                              <label style={{ margin: 0, fontWeight: 600, fontSize: '0.85rem' }}>AM OUT</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', cursor: isSpecialStatus ? 'default' : 'pointer', margin: 0, fontWeight: '500', color: editModal.amOut === '-- -- --' ? 'var(--warning, #f59e0b)' : 'var(--text-muted)' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={editModal.amOut === '-- -- --'}
+                                  onChange={(e) => {
+                                    const val = e.target.checked ? '-- -- --' : '';
+                                    const newCalculated = calculateTimedTotalHours(editModal.amIn, val, editModal.pmIn, editModal.pmOut, editModal.dateStr);
+                                    setEditModal({
+                                      ...editModal,
+                                      amOut: val,
+                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    });
+                                  }}
+                                  disabled={isSpecialStatus}
+                                />
+                                Mispunch
+                              </label>
+                            </div>
+                            {editModal.amOut === '-- -- --' ? (
+                              <input type="text" className="premium-input mispunch-input" value="-- -- --" disabled style={{ width: '100%', color: 'var(--text-muted)', textAlign: 'center', letterSpacing: '2px', fontWeight: 700 }} />
+                            ) : (
+                              <input
+                                type="time"
+                                step="1"
+                                className="premium-input"
+                                style={{ width: '100%' }}
+                                value={editModal.amOut}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const newCalculated = calculateTimedTotalHours(editModal.amIn, val, editModal.pmIn, editModal.pmOut, editModal.dateStr);
+                                  setEditModal({
+                                    ...editModal,
+                                    amOut: val,
+                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                  });
+                                }}
+                                disabled={isSpecialStatus}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* PM Block (Afternoon / Lunch In / Timeout) */}
+                      <div className="dtr-modal-punch-card">
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+                          Afternoon Shift (PM)
+                        </div>
+                        <div style={{ display: 'flex', gap: '14px' }}>
+                          {/* PM IN */}
+                          <div className="premium-select-group" style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                              <label style={{ margin: 0, fontWeight: 600, fontSize: '0.85rem' }}>PM IN</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', cursor: isSpecialStatus ? 'default' : 'pointer', margin: 0, fontWeight: '500', color: editModal.pmIn === '-- -- --' ? 'var(--warning, #f59e0b)' : 'var(--text-muted)' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={editModal.pmIn === '-- -- --'}
+                                  onChange={(e) => {
+                                    const val = e.target.checked ? '-- -- --' : '';
+                                    const newCalculated = calculateTimedTotalHours(editModal.amIn, editModal.amOut, val, editModal.pmOut, editModal.dateStr);
+                                    setEditModal({
+                                      ...editModal,
+                                      pmIn: val,
+                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    });
+                                  }}
+                                  disabled={isSpecialStatus}
+                                />
+                                Mispunch
+                              </label>
+                            </div>
+                            {editModal.pmIn === '-- -- --' ? (
+                              <input type="text" className="premium-input mispunch-input" value="-- -- --" disabled style={{ width: '100%', color: 'var(--text-muted)', textAlign: 'center', letterSpacing: '2px', fontWeight: 700 }} />
+                            ) : (
+                              <input
+                                type="time"
+                                step="1"
+                                className="premium-input"
+                                style={{ width: '100%' }}
+                                value={editModal.pmIn}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const newCalculated = calculateTimedTotalHours(editModal.amIn, editModal.amOut, val, editModal.pmOut, editModal.dateStr);
+                                  setEditModal({
+                                    ...editModal,
+                                    pmIn: val,
+                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                  });
+                                }}
+                                disabled={isSpecialStatus}
+                              />
+                            )}
+                          </div>
+
+                          {/* PM OUT */}
+                          <div className="premium-select-group" style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                              <label style={{ margin: 0, fontWeight: 600, fontSize: '0.85rem' }}>PM OUT</label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', cursor: isSpecialStatus ? 'default' : 'pointer', margin: 0, fontWeight: '500', color: editModal.pmOut === '-- -- --' ? 'var(--warning, #f59e0b)' : 'var(--text-muted)' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={editModal.pmOut === '-- -- --'}
+                                  onChange={(e) => {
+                                    const val = e.target.checked ? '-- -- --' : '';
+                                    const newCalculated = calculateTimedTotalHours(editModal.amIn, editModal.amOut, editModal.pmIn, val, editModal.dateStr);
+                                    setEditModal({
+                                      ...editModal,
+                                      pmOut: val,
+                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : ''),
+                                      status: e.target.checked ? 'Missing Timeout' : (editModal.status === 'Missing Timeout' ? 'Present' : editModal.status)
+                                    });
+                                  }}
+                                  disabled={isSpecialStatus}
+                                />
+                                Mispunch
+                              </label>
+                            </div>
+                            {editModal.pmOut === '-- -- --' ? (
+                              <input type="text" className="premium-input mispunch-input" value="-- -- --" disabled style={{ width: '100%', color: 'var(--text-muted)', textAlign: 'center', letterSpacing: '2px', fontWeight: 700 }} />
+                            ) : (
+                              <input
+                                type="time"
+                                step="1"
+                                className="premium-input"
+                                style={{ width: '100%' }}
+                                value={editModal.pmOut}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const newCalculated = calculateTimedTotalHours(editModal.amIn, editModal.amOut, editModal.pmIn, val, editModal.dateStr);
+                                  setEditModal({
+                                    ...editModal,
+                                    pmOut: val,
+                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                  });
+                                }}
+                                disabled={isSpecialStatus}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Total Hours with Auto-calculation summary */}
+                      <div className="premium-select-group">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <label style={{ margin: 0, fontWeight: 600 }}>Total Hours</label>
+                          {calcHours > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setEditModal({ ...editModal, totalHours: String(calcHours), isCustomHours: false })}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: 0,
+                                cursor: 'pointer',
+                                fontSize: '0.78rem',
+                                color: 'var(--primary)',
+                                fontWeight: 600,
+                                textDecoration: 'underline'
+                              }}
+                            >
+                              Auto-calculated: {calcHours.toFixed(2)}h
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="premium-input"
+                          style={{ width: '100%' }}
+                          placeholder={calcHours > 0 ? calcHours.toFixed(2) : "0.00"}
+                          value={editModal.totalHours}
+                          onChange={(e) => setEditModal({ ...editModal, totalHours: e.target.value, isCustomHours: true })}
+                          disabled={isSpecialStatus}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="dtr-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--glass-border)' }}>
+                  <div>
+                    {editModal.mode === 'edit' && editModal.recordId && (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          color: 'var(--danger, #ef4444)',
+                          border: '1px solid rgba(239, 68, 68, 0.25)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '8px 14px',
+                          borderRadius: '8px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => {
+                          const recId = editModal.recordId;
+                          setEditModal({ ...editModal, isOpen: false });
+                          handleDeleteRecord(recId);
+                        }}
+                      >
+                        <Trash2 size={16} /> Delete Record
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    <button type="button" className="btn btn-outline" onClick={() => setEditModal({ ...editModal, isOpen: false })}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="btn btn-primary" style={{ padding: '8px 22px', fontWeight: 600 }}>
+                      Save Record
+                    </button>
+                  </div>
+                </div>
+              </form>
             </div>
-            <form onSubmit={(e) => { e.preventDefault(); handleSaveModal(); }}>
-              <div className="dtr-modal-body" style={{ padding: '24px 0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="premium-select-group">
-                  <label>Status</label>
-                  <select className="premium-input" value={editModal.status} onChange={(e) => setEditModal({ ...editModal, status: e.target.value })}>
-                    <option value="Present">Present</option>
-                    <option value="Absent">Absent</option>
-                    <option value="Leave">Leave</option>
-                    <option value="Holiday">Holiday</option>
-                    <option value="Rescheduled">Rescheduled</option>
-                  </select>
-                </div>
-                <div style={{ display: 'flex', gap: '16px' }}>
-                  <div className="premium-select-group" style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                      <label style={{ margin: 0 }}>Log In Time</label>
-                    </div>
-                    <input type="time" step="1" className="premium-input" style={{ width: '100%' }} value={editModal.amIn !== '-- -- --' ? editModal.amIn : ''} onChange={(e) => setEditModal({ ...editModal, amIn: e.target.value })} disabled={['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(editModal.status)} />
-                  </div>
-                  <div className="premium-select-group" style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                      <label style={{ margin: 0 }}>Total Hours</label>
-                    </div>
-                    <input type="number" step="0.01" min="0" className="premium-input" style={{ width: '100%' }} value={editModal.totalHours} onChange={(e) => setEditModal({ ...editModal, totalHours: e.target.value })} disabled={['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(editModal.status)} />
-                  </div>
-                </div>
-              </div>
-              <div className="dtr-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '16px' }}>
-                <button type="button" className="btn btn-outline" onClick={() => setEditModal({ ...editModal, isOpen: false })}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Save Record</button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

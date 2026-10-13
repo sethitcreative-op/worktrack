@@ -156,11 +156,14 @@ const FixedDtrPage = () => {
   // Helper: format DATETIME or HH:MM:SS string to 12-hour format
   const formatTime = (datetimeStr, recordDate) => {
     if (!datetimeStr) return '--:--';
-    if (datetimeStr.includes('1900-01-01')) return '-- -- --';
+    const str = String(datetimeStr).trim();
+    if (str.includes('1900-01-01') || str.includes('0000-00-00')) return '-- -- --';
     // Split by space to get time part if it's a datetime
-    const [datePart, timePart] = datetimeStr.includes(' ') ? datetimeStr.split(' ') : [null, datetimeStr];
+    const [datePart, timePart] = str.includes(' ') ? str.split(' ') : [null, str];
+    if (!timePart || !timePart.includes(':')) return '--:--';
     const [hours, minutes] = timePart.split(':');
     const h = parseInt(hours, 10);
+    if (isNaN(h)) return '--:--';
     const period = h >= 12 ? 'PM' : 'AM';
     const h12 = h % 12 || 12;
     let result = `${String(h12).padStart(2, '0')}:${minutes} ${period}`;
@@ -169,6 +172,7 @@ const FixedDtrPage = () => {
     }
     return result;
   };
+
 
   // Helper: format decimal hours (e.g. 8.5) to "HH:MM:SS"
   const formatHoursDuration = (decimalHours) => {

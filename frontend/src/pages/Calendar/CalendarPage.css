@@ -1665,6 +1665,14 @@
   background: rgba(59, 130, 246, 0.05);
 }
 
+.holidays-row {
+  background: rgba(220, 38, 38, 0.02);
+}
+
+.holidays-row:hover {
+  background: rgba(220, 38, 38, 0.04);
+}
+
 .employee-row td,
 .holidays-row td {
   padding: 8px 6px;

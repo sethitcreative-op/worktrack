@@ -79,7 +79,14 @@
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+  table-layout: fixed;
 }
+
+.logs-table th:nth-child(1) { width: 175px; }  /* Timestamp */
+.logs-table th:nth-child(2) { width: 130px; }  /* User */
+.logs-table th:nth-child(3) { width: 160px; }  /* Action */
+.logs-table th:nth-child(4) { width: auto; }   /* Description – takes remaining space */
+.logs-table th:nth-child(5) { width: 200px; }  /* Device Logs */
 
 .logs-table th {
   position: sticky;
@@ -99,6 +106,14 @@
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--card-border);
   font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logs-table td.desc-cell {
+  white-space: normal;
+  word-break: break-word;
 }
 
 .log-row:hover {

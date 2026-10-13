@@ -34,16 +34,15 @@ function calculateTotalHours($am_in, $am_out, $pm_in, $pm_out) {
         
         $total_hours = max(0, $gross_hours - $deduction_hours);
     }
-    return round($total_hours, 2);
+    // Round total hours to nearest 30 minutes (0.5 hrs)
+    return round($total_hours * 2) / 2;
 }
 
 if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
     $user_id = $data->user_id;
     
-    // Use server's reliable time to prevent time theft, and round to nearest 30 minutes
-    $time_unix = time();
-    $rounded_time = round($time_unix / 1800) * 1800;
-    $server_time = ($action === 'fixed_in') ? '10:00:00' : date('H:i:s', $rounded_time);
+    // Use server's reliable time to prevent time theft
+    $server_time = date('H:i:s');
     $server_date = date('Y-m-d');
     $server_datetime = $server_date . ' ' . $server_time;
     
@@ -120,6 +119,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
         UPDATE attendance a
         JOIN users u ON a.user_id = u.id
         SET a.total_hours = ROUND(
+                (
                 CASE 
                     WHEN a.am_in > '2000-01-01' AND a.pm_out > '2000-01-01' THEN 
                         GREATEST(0, (TIMESTAMPDIFF(SECOND, a.am_in, a.pm_out) / 3600) - 
@@ -132,21 +132,23 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
                         )
                     ELSE 0
                 END
-            , 2),
+                ) * 2) / 2,
             a.earnings = ROUND((
-                CASE 
-                    WHEN a.am_in > '2000-01-01' AND a.pm_out > '2000-01-01' THEN 
-                        GREATEST(0, (TIMESTAMPDIFF(SECOND, a.am_in, a.pm_out) / 3600) - 
-                            CASE 
-                                WHEN a.am_out > '2000-01-01' AND a.pm_in > '2000-01-01' THEN 
-                                    GREATEST(0.5, TIMESTAMPDIFF(SECOND, a.am_out, a.pm_in) / 3600)
-                                ELSE 
-                                    IF(TIMESTAMPDIFF(SECOND, a.am_in, a.pm_out) / 3600 > 6, 1.0, 0.0)
-                            END
-                        )
-                    ELSE 0
-                END
-            ) * u.hourly_rate, 2),
+                ROUND((
+                    CASE 
+                        WHEN a.am_in > '2000-01-01' AND a.pm_out > '2000-01-01' THEN 
+                            GREATEST(0, (TIMESTAMPDIFF(SECOND, a.am_in, a.pm_out) / 3600) - 
+                                CASE 
+                                    WHEN a.am_out > '2000-01-01' AND a.pm_in > '2000-01-01' THEN 
+                                        GREATEST(0.5, TIMESTAMPDIFF(SECOND, a.am_out, a.pm_in) / 3600)
+                                    ELSE 
+                                        IF(TIMESTAMPDIFF(SECOND, a.am_in, a.pm_out) / 3600 > 6, 1.0, 0.0)
+                                END
+                            )
+                        ELSE 0
+                    END
+                ) * 2) / 2 * u.hourly_rate
+            ), 2),
             a.status = 'Missing Timeout',
             a.am_out = IF(a.am_in IS NOT NULL AND a.am_in > '2000-01-01' AND (a.am_out IS NULL OR a.am_out < '2000-01-01'), '1900-01-01 00:00:00', a.am_out),
             a.pm_out = IF(a.pm_in IS NOT NULL AND a.pm_in > '2000-01-01' AND (a.pm_out IS NULL OR a.pm_out < '2000-01-01'), '1900-01-01 00:00:00', a.pm_out)
@@ -283,12 +285,12 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
 
     $user_id = isset($_GET['user_id']) ? $_GET['user_id'] : null;
     if ($user_id) {
-        $query = "SELECT a.*, u.hourly_rate FROM attendance a JOIN users u ON a.user_id = u.id WHERE a.user_id = :user_id ORDER BY a.date DESC";
+        $query = "SELECT a.*, u.hourly_rate, u.employee_type FROM attendance a JOIN users u ON a.user_id = u.id WHERE a.user_id = :user_id ORDER BY a.date DESC";
         $stmt = $conn->prepare($query);
         $stmt->execute([':user_id' => $user_id]);
     } else {
         // Admin gets all
-        $query = "SELECT a.*, u.full_name, u.hourly_rate FROM attendance a JOIN users u ON a.user_id = u.id ORDER BY a.date DESC";
+        $query = "SELECT a.*, u.full_name, u.hourly_rate, u.employee_type FROM attendance a JOIN users u ON a.user_id = u.id ORDER BY a.date DESC";
         $stmt = $conn->prepare($query);
         $stmt->execute();
     }
@@ -320,7 +322,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
             $total_hours = 10;
             $rate = $record['employee_type'] === 'Fixed' ? floatval($record['weekly_rate']) : floatval($record['hourly_rate']);
             $earnings = $record['employee_type'] === 'Fixed' ? $rate : round($total_hours * $rate, 2);
-        } elseif (!in_array($status, ['Absent', 'Leave', 'Holiday'])) {
+        } elseif (!in_array($status, ['Absent', 'Leave', 'Holiday', 'Rescheduled'])) {
             if (isset($data->total_hours) && $data->total_hours !== '') {
                 $total_hours = floatval($data->total_hours);
             } else {
@@ -375,7 +377,7 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
             $total_hours = 10;
             $rate = $user['employee_type'] === 'Fixed' ? floatval($user['weekly_rate']) : floatval($user['hourly_rate']);
             $earnings = $user['employee_type'] === 'Fixed' ? $rate : round($total_hours * $rate, 2);
-        } elseif (!in_array($status, ['Absent', 'Leave', 'Holiday'])) {
+        } elseif (!in_array($status, ['Absent', 'Leave', 'Holiday', 'Rescheduled'])) {
             if (isset($data->total_hours) && $data->total_hours !== '') {
                 $total_hours = floatval($data->total_hours);
             } else {
