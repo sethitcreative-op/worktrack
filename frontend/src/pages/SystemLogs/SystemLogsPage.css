@@ -70,9 +70,10 @@
 
 .logs-table-container {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   border: 1px solid var(--card-border);
-  border-radius: 8px;
+  border-radius: 12px;
+  background: var(--card-bg);
 }
 
 .logs-table {
@@ -80,64 +81,92 @@
   border-collapse: collapse;
   text-align: left;
   table-layout: fixed;
+  min-width: 950px;
 }
 
-.logs-table th:nth-child(1) { width: 175px; }  /* Timestamp */
-.logs-table th:nth-child(2) { width: 130px; }  /* User */
-.logs-table th:nth-child(3) { width: 160px; }  /* Action */
+.logs-table th:nth-child(1) { width: 195px; }  /* Timestamp */
+.logs-table th:nth-child(2) { width: 155px; }  /* User */
+.logs-table th:nth-child(3) { width: 155px; }  /* Action */
 .logs-table th:nth-child(4) { width: auto; }   /* Description – takes remaining space */
-.logs-table th:nth-child(5) { width: 200px; }  /* Device Logs */
+.logs-table th:nth-child(5) { width: 220px; }  /* Device Logs */
 
 .logs-table th {
   position: sticky;
   top: 0;
   background: var(--table-header-bg);
-  padding: 0.75rem 1rem;
+  padding: 10px 14px;
   font-weight: 600;
   color: var(--table-header-text);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--card-border);
+  vertical-align: middle;
   z-index: 10;
 }
 
 .logs-table td {
-  padding: 0.75rem 1rem;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--card-border);
   font-size: 0.85rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  vertical-align: middle;
+  display: table-cell !important;
+}
+
+.logs-table tr:last-child td {
+  border-bottom: none;
+}
+
+.logs-table td.log-time-cell,
+.logs-table td.time-cell {
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
+.logs-table td.log-user-cell,
+.logs-table td.user-cell {
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: table-cell !important;
+}
+
+.logs-table td.log-action-cell,
+.logs-table td.action-cell {
+  white-space: nowrap;
+}
+
+.logs-table td.log-desc-cell,
 .logs-table td.desc-cell {
   white-space: normal;
   word-break: break-word;
+  color: var(--text-main);
+  line-height: 1.45;
+}
+
+.logs-table td.log-device-cell,
+.logs-table td.device-cell {
+  vertical-align: middle;
 }
 
 .log-row:hover {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.time-cell {
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.user-cell {
-  font-weight: 500;
-  color: var(--text-main);
-}
-
 .action-badge {
-  display: inline-block;
-  padding: 0.2rem 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
   border-radius: 20px;
   font-size: 0.7rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+  white-space: nowrap;
+  line-height: 1;
 }
 
 .bg-blue {
