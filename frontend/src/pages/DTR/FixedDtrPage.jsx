@@ -353,6 +353,10 @@ const FixedDtrPage = () => {
 
   const openEditModal = (record, dayObj, targetUserId) => {
     if (record) {
+      const rawHours = record.total_hours !== null && record.total_hours !== undefined ? parseFloat(record.total_hours) : null;
+      const existingHours = rawHours !== null && !isNaN(rawHours) && rawHours > 0
+        ? String(rawHours)
+        : '';
       setEditModal({
         isOpen: true,
         mode: 'edit',
@@ -363,7 +367,7 @@ const FixedDtrPage = () => {
         amOut: record.am_out ? (record.am_out.includes('1900-01-01') ? '-- -- --' : record.am_out.split(' ')[1]) : '',
         pmIn: record.pm_in ? (record.pm_in.includes('1900-01-01') ? '-- -- --' : record.pm_in.split(' ')[1]) : '',
         pmOut: record.pm_out ? (record.pm_out.includes('1900-01-01') ? '-- -- --' : record.pm_out.split(' ')[1]) : '',
-        totalHours: record.total_hours !== null && record.total_hours !== undefined ? String(record.total_hours) : '',
+        totalHours: existingHours || '10',
         status: record.status || 'Present'
       });
     } else {
@@ -377,7 +381,7 @@ const FixedDtrPage = () => {
         amOut: '',
         pmIn: '',
         pmOut: '',
-        totalHours: '',
+        totalHours: '10',
         status: 'Present'
       });
     }
@@ -390,6 +394,14 @@ const FixedDtrPage = () => {
       const pmInDate = editModal.pmIn === '-- -- --' ? '1900-01-01 00:00:00' : (editModal.pmIn ? `${editModal.dateStr} ${editModal.pmIn}` : '');
       const pmOutDate = editModal.pmOut === '-- -- --' ? '1900-01-01 00:00:00' : (editModal.pmOut ? `${editModal.dateStr} ${editModal.pmOut}` : '');
 
+      const isSpecialStatus = ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(editModal.status);
+      let totalHoursVal = editModal.totalHours;
+      if (isSpecialStatus) {
+        totalHoursVal = editModal.status === 'Leave' ? '10' : '0';
+      } else {
+        totalHoursVal = (!editModal.totalHours || editModal.totalHours === '0' || editModal.totalHours === '0.00') ? '10' : editModal.totalHours;
+      }
+
       const payload = {
         action: editModal.mode === 'edit' ? 'edit_record' : 'add_record',
         record_id: editModal.recordId,
@@ -400,7 +412,7 @@ const FixedDtrPage = () => {
         am_out: amOutDate,
         pm_in: pmInDate,
         pm_out: pmOutDate,
-        total_hours: editModal.totalHours,
+        total_hours: totalHoursVal,
         status: editModal.status === 'Missing Timeout' ? 'Present' : editModal.status
       };
 
@@ -1129,8 +1141,8 @@ const FixedDtrPage = () => {
                     </div>
                     {isAdmin && (
                       <div className="employee-stat-group">
-                        <span className="stat-label">Rate/Hr</span>
-                        <span className="stat-value" style={{ color: 'var(--success)' }}>${displayUser.hourly_rate || '0.00'}</span>
+                        <span className="stat-label">Weekly Rate</span>
+                        <span className="stat-value" style={{ color: 'var(--success)' }}>${displayUser.weekly_rate || '0.00'}</span>
                       </div>
                     )}
                   </div>
@@ -1208,7 +1220,7 @@ const FixedDtrPage = () => {
                             // If a real DTR row exists, it always wins — never overlay leave/event virtualStatus on top of it.
 
                             const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-                            const rate = row ? (parseFloat(row.hourly_rate) || parseFloat(displayUser.hourly_rate) || 0) : 0;
+                            const rate = row ? (parseFloat(row.weekly_rate) || parseFloat(row.hourly_rate) || parseFloat(displayUser.weekly_rate) || parseFloat(displayUser.hourly_rate) || 0) : (parseFloat(displayUser.weekly_rate) || parseFloat(displayUser.hourly_rate) || 0);
                             const earnings = hrs * rate;
 
                             grandTotalHrs += hrs;
@@ -1362,7 +1374,7 @@ const FixedDtrPage = () => {
                           }
 
                           const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-                          const rate = row ? (parseFloat(row.hourly_rate) || parseFloat(emp.hourly_rate) || 0) : 0;
+                          const rate = row ? (parseFloat(row.weekly_rate) || parseFloat(row.hourly_rate) || parseFloat(emp.weekly_rate) || parseFloat(emp.hourly_rate) || 0) : (parseFloat(emp.weekly_rate) || parseFloat(emp.hourly_rate) || 0);
                           const earnings = hrs * rate;
 
                           grandTotalHrs += hrs;
@@ -1466,7 +1478,26 @@ const FixedDtrPage = () => {
               <div className="dtr-modal-body" style={{ padding: '24px 0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div className="premium-select-group">
                   <label>Status</label>
-                  <select className="premium-input" value={editModal.status} onChange={(e) => setEditModal({ ...editModal, status: e.target.value })}>
+                  <select
+                    className="premium-input"
+                    value={editModal.status}
+                    onChange={(e) => {
+                      const newStatus = e.target.value;
+                      let newHours = editModal.totalHours;
+                      if (newStatus === 'Leave') {
+                        newHours = '10';
+                      } else if (newStatus === 'Absent' || newStatus === 'Holiday' || newStatus === 'Rescheduled') {
+                        newHours = '0';
+                      } else if (newStatus === 'Present') {
+                        newHours = (!editModal.totalHours || editModal.totalHours === '0' || editModal.totalHours === '0.00') ? '10' : editModal.totalHours;
+                      }
+                      setEditModal({
+                        ...editModal,
+                        status: newStatus,
+                        totalHours: newHours
+                      });
+                    }}
+                  >
                     <option value="Present">Present</option>
                     <option value="Absent">Absent</option>
                     <option value="Leave">Leave</option>

@@ -403,8 +403,9 @@ const AdminDtrPage = () => {
       const amOutVal = parseTimeOrMispunch(record.am_out);
       const pmInVal = parseTimeOrMispunch(record.pm_in);
       const pmOutVal = parseTimeOrMispunch(record.pm_out);
-      const existingHours = record.total_hours !== null && record.total_hours !== undefined && record.total_hours !== ''
-        ? String(record.total_hours)
+      const rawHours = record.total_hours !== null && record.total_hours !== undefined ? parseFloat(record.total_hours) : null;
+      const existingHours = rawHours !== null && !isNaN(rawHours) && rawHours > 0
+        ? String(rawHours)
         : '';
 
       setEditModal({
@@ -2241,9 +2242,12 @@ const AdminDtrPage = () => {
                             }
                             // If a real DTR row exists, it always wins — never overlay leave/event virtualStatus on top of it.
 
+                            const isFixedUser = displayUser?.employee_type === 'Fixed';
                             const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-                            const rate = row ? (parseFloat(row.hourly_rate) || parseFloat(displayUser.hourly_rate) || 0) : 0;
-                            const earnings = hrs * rate;
+                            const rate = row
+                              ? (isFixedUser ? (parseFloat(row.weekly_rate) || parseFloat(displayUser?.weekly_rate) || 0) : (parseFloat(row.hourly_rate) || parseFloat(displayUser?.hourly_rate) || 0))
+                              : (isFixedUser ? parseFloat(displayUser?.weekly_rate || 0) : parseFloat(displayUser?.hourly_rate || 0));
+                            const earnings = isFixedUser ? rate : hrs * rate;
 
                             grandTotalHrs += hrs;
                             grandTotalEarnings += earnings;
@@ -2438,9 +2442,12 @@ const AdminDtrPage = () => {
                             }
                           }
 
+                          const isFixedEmp = emp.employee_type === 'Fixed';
                           const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-                          const rate = row ? (parseFloat(row.hourly_rate) || parseFloat(emp.hourly_rate) || 0) : 0;
-                          const earnings = hrs * rate;
+                          const rate = row
+                            ? (isFixedEmp ? (parseFloat(row.weekly_rate) || parseFloat(emp.weekly_rate) || 0) : (parseFloat(row.hourly_rate) || parseFloat(emp.hourly_rate) || 0))
+                            : (isFixedEmp ? parseFloat(emp.weekly_rate || 0) : parseFloat(emp.hourly_rate || 0));
+                          const earnings = isFixedEmp ? rate : hrs * rate;
 
                           grandTotalHrs += hrs;
                           grandTotalEarnings += earnings;
@@ -2595,10 +2602,24 @@ const AdminDtrPage = () => {
                       value={editModal.status}
                       onChange={(e) => {
                         const newStatus = e.target.value;
+                        let newHours = editModal.totalHours;
+                        if (newStatus === 'Leave') {
+                          newHours = '10';
+                        } else if (newStatus === 'Absent' || newStatus === 'Holiday' || newStatus === 'Rescheduled') {
+                          newHours = '0';
+                        } else if (newStatus === 'Present') {
+                          if (isFixed) {
+                            newHours = (!editModal.totalHours || editModal.totalHours === '0' || editModal.totalHours === '0.00') ? '10' : editModal.totalHours;
+                          } else {
+                            const calculated = calculateTimedTotalHours(editModal.amIn, editModal.amOut, editModal.pmIn, editModal.pmOut, editModal.dateStr);
+                            newHours = calculated > 0 ? String(calculated) : (editModal.totalHours === '0' || editModal.totalHours === '0.00' ? '' : editModal.totalHours);
+                          }
+                        }
                         setEditModal({
                           ...editModal,
                           status: newStatus,
-                          totalHours: newStatus === 'Leave' ? '10' : (newStatus === 'Absent' || newStatus === 'Holiday' || newStatus === 'Rescheduled' ? '0' : editModal.totalHours)
+                          totalHours: newHours,
+                          isCustomHours: (newStatus === 'Present' && (editModal.totalHours === '0' || editModal.totalHours === '0.00')) ? false : editModal.isCustomHours
                         });
                       }}
                     >

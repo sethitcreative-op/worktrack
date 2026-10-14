@@ -62,7 +62,7 @@ try {
             $currentStatus = $record['status'];
             // If no punches exist and current status is not a protected state
             if (!$record['am_in'] && !$record['pm_out']) {
-                $protectedStatuses = ['Rescheduled', 'Leave', 'Holiday'];
+                $protectedStatuses = ['Rescheduled', 'Leave', 'Holiday', 'Present', 'Missing Timeout'];
                 if ($targetStatus !== null && !in_array($currentStatus, $protectedStatuses) && $currentStatus !== $targetStatus) {
                     $updateQuery = "UPDATE attendance SET status = :status WHERE id = :id";
                     $updateStmt = $conn->prepare($updateQuery);

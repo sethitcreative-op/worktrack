@@ -254,22 +254,25 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
 
         // Also update existing records that have no clock-in and are not in a protected status
         $updateAbsentQuery = "
-            UPDATE attendance
-            SET status = 'Absent'
-            WHERE user_id = :uid
-              AND date < :server_date
-              AND am_in IS NULL
-              AND status NOT IN ('Leave', 'Holiday', 'Rescheduled')
+            UPDATE attendance a
+            JOIN users u ON a.user_id = u.id
+            SET a.status = 'Absent'
+            WHERE a.user_id = :uid
+              AND a.date < :server_date
+              AND (a.am_in IS NULL OR a.am_in < '2000-01-01')
+              AND (a.pm_in IS NULL OR a.pm_in < '2000-01-01')
+              AND a.status NOT IN ('Leave', 'Holiday', 'Rescheduled', 'Present', 'Missing Timeout')
+              AND u.employee_type != 'Fixed'
               AND NOT EXISTS (
                   SELECT 1 FROM leave_requests lr
                   WHERE lr.user_id = :uid2
                     AND lr.status = 'approved'
-                    AND attendance.date BETWEEN lr.start_date AND lr.end_date
+                    AND a.date BETWEEN lr.start_date AND lr.end_date
               )
               AND EXISTS (
                   SELECT 1 FROM events ev_sched
                   WHERE ev_sched.user_id = :uid3
-                    AND ev_sched.event_date = attendance.date
+                    AND ev_sched.event_date = a.date
                     AND ev_sched.status = 'approved'
                     AND (ev_sched.event_type = 'WS' OR ev_sched.title = 'Work Shift')
               )
@@ -285,12 +288,12 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
 
     $user_id = isset($_GET['user_id']) ? $_GET['user_id'] : null;
     if ($user_id) {
-        $query = "SELECT a.*, u.hourly_rate, u.employee_type FROM attendance a JOIN users u ON a.user_id = u.id WHERE a.user_id = :user_id ORDER BY a.date DESC";
+        $query = "SELECT a.*, u.hourly_rate, u.weekly_rate, u.employee_type FROM attendance a JOIN users u ON a.user_id = u.id WHERE a.user_id = :user_id ORDER BY a.date DESC";
         $stmt = $conn->prepare($query);
         $stmt->execute([':user_id' => $user_id]);
     } else {
         // Admin gets all
-        $query = "SELECT a.*, u.full_name, u.hourly_rate, u.employee_type FROM attendance a JOIN users u ON a.user_id = u.id ORDER BY a.date DESC";
+        $query = "SELECT a.*, u.full_name, u.hourly_rate, u.weekly_rate, u.employee_type FROM attendance a JOIN users u ON a.user_id = u.id ORDER BY a.date DESC";
         $stmt = $conn->prepare($query);
         $stmt->execute();
     }
@@ -327,6 +330,9 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
                 $total_hours = floatval($data->total_hours);
             } else {
                 $total_hours = calculateTotalHours($am_in, $am_out, $pm_in, $pm_out);
+            }
+            if ($record['employee_type'] === 'Fixed' && $total_hours == 0) {
+                $total_hours = 10;
             }
             $rate = $record['employee_type'] === 'Fixed' ? floatval($record['weekly_rate']) : floatval($record['hourly_rate']);
             $earnings = $record['employee_type'] === 'Fixed' ? $rate : round($total_hours * $rate, 2);
@@ -382,6 +388,9 @@ if (in_array($action, ['am_in', 'am_out', 'pm_in', 'pm_out', 'fixed_in'])) {
                 $total_hours = floatval($data->total_hours);
             } else {
                 $total_hours = calculateTotalHours($am_in, $am_out, $pm_in, $pm_out);
+            }
+            if ($user['employee_type'] === 'Fixed' && $total_hours == 0) {
+                $total_hours = 10;
             }
             $rate = $user['employee_type'] === 'Fixed' ? floatval($user['weekly_rate']) : floatval($user['hourly_rate']);
             $earnings = $user['employee_type'] === 'Fixed' ? $rate : round($total_hours * $rate, 2);

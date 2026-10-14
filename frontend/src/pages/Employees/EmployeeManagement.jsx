@@ -185,24 +185,25 @@ const EmployeeManagement = () => {
     }
 
     try {
+      const isFixed = (formData.employee_type || '').toLowerCase() === 'fixed';
       const data = new FormData();
       data.append('username', formData.username);
       data.append('full_name', formData.full_name);
-      data.append('hourly_rate', formData.hourly_rate || '0');
-      data.append('weekly_rate', formData.weekly_rate || '0');
+      data.append('hourly_rate', isFixed ? '0' : (formData.hourly_rate || '0'));
+      data.append('weekly_rate', isFixed ? (formData.weekly_rate || '0') : '0');
       data.append('role', formData.role);
-      data.append('email', formData.email);
+      data.append('email', formData.email || '');
       const fullPhone = formData.phone_number ? `${formData.phone_code} ${formData.phone_number}` : '';
       data.append('phone', fullPhone);
-      data.append('address', formData.address);
-      data.append('id_number', formData.id_number);
+      data.append('address', formData.address || '');
+      data.append('id_number', formData.id_number || '');
       if (formData.sex) {
         data.append('sex', formData.sex);
       }
       
-      data.append('is_active', formData.is_active);
-      data.append('leave_credits', formData.leave_credits);
-      data.append('employee_type', formData.employee_type);
+      data.append('is_active', formData.is_active !== undefined ? formData.is_active : 1);
+      data.append('leave_credits', formData.leave_credits || 0);
+      data.append('employee_type', isFixed ? 'Fixed' : 'Timed');
 
       if (formData.password) {
         data.append('password', formData.password);
@@ -221,23 +222,37 @@ const EmployeeManagement = () => {
         data.append('_method', 'PUT');
       }
 
-      const res = await axios.post(`${API_BASE}/employees.php`, data, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        }
-      });
+      const res = await axios.post(`${API_BASE}/employees.php`, data);
 
       if (res.data.status === 'success') {
-        if (editingId) {
-          const actionText = `Updated employee: ${formData.username}`;
+        const savedHourlyRate = isFixed ? '0.00' : (formData.hourly_rate || '0.00');
+        const savedWeeklyRate = isFixed ? (formData.weekly_rate || '0.00') : '0.00';
+        const savedType = isFixed ? 'Fixed' : 'Timed';
 
+        if (editingId) {
           if (editingId == user.id) {
-            const updatedUser = { ...user, ...formData };
+            const updatedUser = { 
+              ...user, 
+              ...formData, 
+              hourly_rate: savedHourlyRate,
+              weekly_rate: savedWeeklyRate,
+              employee_type: savedType 
+            };
             if (res.data.profile_picture) {
               updatedUser.profile_picture = res.data.profile_picture;
             }
             localStorage.setItem('user', JSON.stringify(updatedUser));
             window.dispatchEvent(new Event('userUpdated'));
+          }
+
+          if (selectedEmployeeForView && selectedEmployeeForView.id == editingId) {
+            setSelectedEmployeeForView(prev => ({
+              ...prev,
+              ...formData,
+              hourly_rate: savedHourlyRate,
+              weekly_rate: savedWeeklyRate,
+              employee_type: savedType
+            }));
           }
         }
 
@@ -275,12 +290,13 @@ const EmployeeManagement = () => {
       }
     }
 
+    const isFixed = (emp.employee_type || '').toLowerCase() === 'fixed';
     setFormData({
       username: emp.username || '',
       password: '',
       full_name: emp.full_name || '',
-      hourly_rate: emp.hourly_rate || '',
-      weekly_rate: emp.weekly_rate || '',
+      hourly_rate: emp.hourly_rate !== undefined && emp.hourly_rate !== null ? (parseFloat(emp.hourly_rate) === 0 ? '' : emp.hourly_rate) : '',
+      weekly_rate: emp.weekly_rate !== undefined && emp.weekly_rate !== null ? (parseFloat(emp.weekly_rate) === 0 ? '' : emp.weekly_rate) : '',
       role: emp.role || 'user',
       email: emp.email || '',
       phone_code: pCode,
@@ -290,7 +306,7 @@ const EmployeeManagement = () => {
       sex: emp.sex || '',
       is_active: emp.is_active !== undefined ? parseInt(emp.is_active) : 1,
       leave_credits: emp.leave_credits !== undefined ? parseInt(emp.leave_credits) : 0,
-      employee_type: emp.employee_type || 'Timed'
+      employee_type: isFixed ? 'Fixed' : 'Timed'
     });
     setProfilePictureFile(null);
     setPreviewImage(emp.profile_picture || null);
@@ -385,7 +401,7 @@ const EmployeeManagement = () => {
         `"${(emp.email || '').replace(/"/g, '""')}"`,
         `"${(emp.phone || '').replace(/"/g, '""')}"`,
         `"${(emp.address || '').replace(/"/g, '""')}"`,
-        `${emp.employee_type === 'Fixed' ? (emp.weekly_rate || 0) : (emp.hourly_rate || 0)}`
+        `${(emp.employee_type || '').toLowerCase() === 'fixed' ? (emp.weekly_rate || 0) : (emp.hourly_rate || 0)}`
       ];
       csvRows.push(row.join(','));
     });
@@ -518,7 +534,7 @@ const EmployeeManagement = () => {
                 {[
                   { id: 'profile', label: formData.role === 'admin' ? 'Profile Details' : 'Personal Details' },
                   ...(formData.role === 'admin' ? [] : [
-                    { id: 'rate', label: 'Rate' },
+                    { id: 'rate', label: (formData.employee_type || '').toLowerCase() === 'fixed' ? 'Weekly Rate' : 'Hourly Rate' },
                     { id: 'government', label: 'Government ID' }
                   ])
                 ].map(tab => (
@@ -596,6 +612,30 @@ const EmployeeManagement = () => {
                           <option value="Fixed">Fixed</option>
                         </select>
                       </div>
+                      {formData.role !== 'admin' && (
+                        <div className="modal-field">
+                          <label>{(formData.employee_type || '').toLowerCase() === 'fixed' ? 'Weekly Rate ($)' : 'Hourly Rate ($)'}</label>
+                          {(formData.employee_type || '').toLowerCase() === 'fixed' ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="input-field"
+                              placeholder="0.00"
+                              value={formData.weekly_rate}
+                              onChange={e => setFormData({ ...formData, weekly_rate: e.target.value })}
+                            />
+                          ) : (
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="input-field"
+                              placeholder="0.00"
+                              value={formData.hourly_rate}
+                              onChange={e => setFormData({ ...formData, hourly_rate: e.target.value })}
+                            />
+                          )}
+                        </div>
+                      )}
                       <div className="modal-field">
                         <label>Email Address</label>
                         <input type="email" className="input-field" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} />
@@ -663,21 +703,21 @@ const EmployeeManagement = () => {
                   <div className="form-section animate-panel">
                     <h4 style={{ marginTop: 0, marginBottom: '20px', color: 'var(--text-main)' }}>Rate & Benefits</h4>
                     <div className="modal-field">
-                      {formData.employee_type === 'Fixed' ? (
+                      {(formData.employee_type || '').toLowerCase() === 'fixed' ? (
                         <>
                           <label>Weekly Rate ($)</label>
-                          <input type="number" step="0.01" className="input-field" required value={formData.weekly_rate} onChange={e => setFormData({ ...formData, weekly_rate: e.target.value })} />
+                          <input type="number" step="0.01" className="input-field" placeholder="0.00" value={formData.weekly_rate} onChange={e => setFormData({ ...formData, weekly_rate: e.target.value })} />
                         </>
                       ) : (
                         <>
                           <label>Hourly Rate ($)</label>
-                          <input type="number" step="0.01" className="input-field" required value={formData.hourly_rate} onChange={e => setFormData({ ...formData, hourly_rate: e.target.value })} />
+                          <input type="number" step="0.01" className="input-field" placeholder="0.00" value={formData.hourly_rate} onChange={e => setFormData({ ...formData, hourly_rate: e.target.value })} />
                         </>
                       )}
                     </div>
                     <div className="modal-field" style={{ marginTop: '16px' }}>
                       <label>Leave Credits (Days/Year)</label>
-                      <input type="number" min="0" className="input-field" required value={formData.leave_credits} onChange={e => setFormData({ ...formData, leave_credits: e.target.value })} />
+                      <input type="number" min="0" className="input-field" value={formData.leave_credits} onChange={e => setFormData({ ...formData, leave_credits: e.target.value })} />
                     </div>
                   </div>
                 )}
@@ -760,14 +800,14 @@ const EmployeeManagement = () => {
                     </td>
                     <td data-label="Type">
                       <span className="mgmt-role-badge" style={{ background: 'var(--card-bg)', color: 'var(--text-main)', border: '1px solid var(--card-border)' }}>
-                        {emp.employee_type === 'Fixed' ? 'Fixed' : 'Timed'}
+                        {(emp.employee_type || '').toLowerCase() === 'fixed' ? 'Fixed' : 'Timed'}
                       </span>
                     </td>
                     <td data-label="Rate" className="rate-cell">
-                      {emp.employee_type === 'Fixed' ? (
-                        parseFloat(emp.weekly_rate) === 0 || !emp.weekly_rate ? '-- --' : `$${emp.weekly_rate}/wk`
+                      {(emp.employee_type || '').toLowerCase() === 'fixed' ? (
+                        parseFloat(emp.weekly_rate) === 0 || !emp.weekly_rate ? '-- --' : `$${parseFloat(emp.weekly_rate).toFixed(2)}/wk`
                       ) : (
-                        parseFloat(emp.hourly_rate) === 0 || !emp.hourly_rate ? '-- --' : `$${emp.hourly_rate}/hr`
+                        parseFloat(emp.hourly_rate) === 0 || !emp.hourly_rate ? '-- --' : `$${parseFloat(emp.hourly_rate).toFixed(2)}/hr`
                       )}
                     </td>
                     <td data-label="Email">
@@ -824,9 +864,21 @@ const EmployeeManagement = () => {
                   <div className="team-card-info">
                     <h3>{emp.full_name}</h3>
                     <p>@{emp.username}</p>
-                    <span className={`team-role-badge ${emp.role}`}>
-                      {emp.role === 'admin' ? <Crown size={12}/> : <Users size={12}/>} {emp.role === 'admin' ? 'Administrator' : 'Agent'}
-                    </span>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' }}>
+                      <span className={`team-role-badge ${emp.role}`}>
+                        {emp.role === 'admin' ? <Crown size={12}/> : <Users size={12}/>} {emp.role === 'admin' ? 'Administrator' : 'Agent'}
+                      </span>
+                      <span className="mgmt-role-badge" style={{ fontSize: '0.75rem', padding: '2px 8px', background: 'var(--card-bg)', color: 'var(--text-main)', border: '1px solid var(--card-border)' }}>
+                        {(emp.employee_type || '').toLowerCase() === 'fixed' ? 'Fixed' : 'Timed'}
+                      </span>
+                    </div>
+                    {emp.role !== 'admin' && (
+                      <p style={{ margin: '6px 0 0 0', fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary-color, #3b82f6)' }}>
+                        {(emp.employee_type || '').toLowerCase() === 'fixed'
+                          ? (parseFloat(emp.weekly_rate) === 0 || !emp.weekly_rate ? '-- --' : `$${parseFloat(emp.weekly_rate).toFixed(2)}/wk`)
+                          : (parseFloat(emp.hourly_rate) === 0 || !emp.hourly_rate ? '-- --' : `$${parseFloat(emp.hourly_rate).toFixed(2)}/hr`)}
+                      </p>
+                    )}
                   </div>
                   <div className="team-card-actions" style={{ position: 'absolute', top: '12px', right: '12px', display: 'flex', gap: '8px' }}>
                      <button className="mgmt-action-btn" onClick={(e) => { e.stopPropagation(); handleEditClick(emp); }} style={{ background: 'rgba(255,255,255,0.1)', padding: '6px', borderRadius: '6px', color: '#fff', border: 'none', cursor: 'pointer' }}>
@@ -868,17 +920,17 @@ const EmployeeManagement = () => {
                     </span>
                     {selectedEmployeeForView.role !== 'admin' && (
                       <span className="rate-badge">
-                        {selectedEmployeeForView.employee_type === 'Fixed' ? (
+                        {(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? (
                           parseFloat(selectedEmployeeForView.weekly_rate) === 0 || !selectedEmployeeForView.weekly_rate ? (
                             '-- --'
                           ) : (
-                            <><DollarSign size={12} /> {selectedEmployeeForView.weekly_rate}/wk</>
+                            <><DollarSign size={12} /> {parseFloat(selectedEmployeeForView.weekly_rate).toFixed(2)}/wk</>
                           )
                         ) : (
                           parseFloat(selectedEmployeeForView.hourly_rate) === 0 || !selectedEmployeeForView.hourly_rate ? (
                             '-- --'
                           ) : (
-                            <><DollarSign size={12} /> {selectedEmployeeForView.hourly_rate}/hr</>
+                            <><DollarSign size={12} /> {parseFloat(selectedEmployeeForView.hourly_rate).toFixed(2)}/hr</>
                           )
                         )}
                       </span>
@@ -954,11 +1006,19 @@ const EmployeeManagement = () => {
                           <label>Role</label>
                           <p>{selectedEmployeeForView.role === 'admin' ? 'Administrator' : 'User'}</p>
                         </div>
+                        <div className="info-group">
+                          <label>Employee Type</label>
+                          <p>{(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? 'Fixed' : 'Timed'}</p>
+                        </div>
                         {selectedEmployeeForView.role !== 'admin' && (
                         <div className="info-group">
-                          <label>Hourly Rate</label>
+                          <label>{(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? 'Weekly Rate' : 'Hourly Rate'}</label>
                           <p className="highlight-text">
-                            {parseFloat(selectedEmployeeForView.hourly_rate) === 0 || !selectedEmployeeForView.hourly_rate ? '-- --' : `$${selectedEmployeeForView.hourly_rate}/hr`}
+                            {(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? (
+                              parseFloat(selectedEmployeeForView.weekly_rate) === 0 || !selectedEmployeeForView.weekly_rate ? '-- --' : `$${parseFloat(selectedEmployeeForView.weekly_rate).toFixed(2)}/wk`
+                            ) : (
+                              parseFloat(selectedEmployeeForView.hourly_rate) === 0 || !selectedEmployeeForView.hourly_rate ? '-- --' : `$${parseFloat(selectedEmployeeForView.hourly_rate).toFixed(2)}/hr`
+                            )}
                           </p>
                         </div>
                         )}

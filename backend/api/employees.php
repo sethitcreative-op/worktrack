@@ -62,15 +62,16 @@ elseif ($method === 'POST') {
     $input = file_get_contents("php://input");
     $data = json_decode($input);
     
-    $isUpdate = isset($_POST['_method']) && $_POST['_method'] === 'PUT';
+    $id = $_POST['id'] ?? ($data->id ?? null);
+    $methodParam = $_POST['_method'] ?? ($data->_method ?? '');
+    $isUpdate = (strtoupper(trim($methodParam)) === 'PUT') || !empty($id);
     
     $username = $_POST['username'] ?? ($data->username ?? '');
     $password = $_POST['password'] ?? ($data->password ?? '');
     $role = $_POST['role'] ?? ($data->role ?? 'user');
     $full_name = $_POST['full_name'] ?? ($data->full_name ?? '');
-    $hourly_rate = $_POST['hourly_rate'] ?? ($data->hourly_rate ?? 0);
-    $weekly_rate = $_POST['weekly_rate'] ?? ($data->weekly_rate ?? 0);
-    $id = $_POST['id'] ?? ($data->id ?? null);
+    $hourly_rate = isset($_POST['hourly_rate']) ? floatval($_POST['hourly_rate']) : (isset($data->hourly_rate) ? floatval($data->hourly_rate) : 0);
+    $weekly_rate = isset($_POST['weekly_rate']) ? floatval($_POST['weekly_rate']) : (isset($data->weekly_rate) ? floatval($data->weekly_rate) : 0);
     
     // New fields
     $email = $_POST['email'] ?? ($data->email ?? null);
@@ -80,7 +81,8 @@ elseif ($method === 'POST') {
     $sex = $_POST['sex'] ?? ($data->sex ?? null);
     $is_active = $_POST['is_active'] ?? ($data->is_active ?? 1);
     $leave_credits = $_POST['leave_credits'] ?? ($data->leave_credits ?? 0);
-    $employee_type = $_POST['employee_type'] ?? ($data->employee_type ?? 'Timed');
+    $employee_type_raw = $_POST['employee_type'] ?? ($data->employee_type ?? 'Timed');
+    $employee_type = strtolower(trim($employee_type_raw)) === 'fixed' ? 'Fixed' : 'Timed';
     
     $profile_picture = null;
     if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] == 0) {
@@ -198,16 +200,17 @@ elseif ($method === 'PUT') {
         $username = $data->username;
         $role = $data->role ?? 'user';
         $full_name = $data->full_name;
-        $hourly_rate = $data->hourly_rate;
-        $weekly_rate = $data->weekly_rate ?? 0;
+        $hourly_rate = isset($data->hourly_rate) ? floatval($data->hourly_rate) : 0;
+        $weekly_rate = isset($data->weekly_rate) ? floatval($data->weekly_rate) : 0;
+        $employee_type = (isset($data->employee_type) && strtolower(trim($data->employee_type)) === 'fixed') ? 'Fixed' : 'Timed';
 
         if (!empty($data->password)) {
             $password_hash = password_hash($data->password, PASSWORD_BCRYPT);
-            $query = "UPDATE users SET username=:username, password_hash=:pass, role=:role, full_name=:name, hourly_rate=:rate, weekly_rate=:weekly_rate WHERE id=:id";
-            $params = [':username'=>$username, ':pass'=>$password_hash, ':role'=>$role, ':name'=>$full_name, ':rate'=>$hourly_rate, ':weekly_rate'=>$weekly_rate, ':id'=>$id];
+            $query = "UPDATE users SET username=:username, password_hash=:pass, role=:role, full_name=:name, hourly_rate=:rate, weekly_rate=:weekly_rate, employee_type=:employee_type WHERE id=:id";
+            $params = [':username'=>$username, ':pass'=>$password_hash, ':role'=>$role, ':name'=>$full_name, ':rate'=>$hourly_rate, ':weekly_rate'=>$weekly_rate, ':employee_type'=>$employee_type, ':id'=>$id];
         } else {
-            $query = "UPDATE users SET username=:username, role=:role, full_name=:name, hourly_rate=:rate, weekly_rate=:weekly_rate WHERE id=:id";
-            $params = [':username'=>$username, ':role'=>$role, ':name'=>$full_name, ':rate'=>$hourly_rate, ':weekly_rate'=>$weekly_rate, ':id'=>$id];
+            $query = "UPDATE users SET username=:username, role=:role, full_name=:name, hourly_rate=:rate, weekly_rate=:weekly_rate, employee_type=:employee_type WHERE id=:id";
+            $params = [':username'=>$username, ':role'=>$role, ':name'=>$full_name, ':rate'=>$hourly_rate, ':weekly_rate'=>$weekly_rate, ':employee_type'=>$employee_type, ':id'=>$id];
         }
 
         $stmt = $conn->prepare($query);

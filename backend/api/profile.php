@@ -77,7 +77,7 @@ if ($method === 'POST') {
         $stmt->execute($params);
         
         // Fetch updated user to send back
-        $fetch_query = "SELECT id, username, role, full_name, hourly_rate, profile_picture, sex, phone, created_at FROM users WHERE id = :id";
+        $fetch_query = "SELECT id, username, role, full_name, hourly_rate, weekly_rate, employee_type, profile_picture, sex, phone, created_at FROM users WHERE id = :id";
         $fetch_stmt = $conn->prepare($fetch_query);
         $fetch_stmt->execute([':id' => $id]);
         $updated_user = $fetch_stmt->fetch(PDO::FETCH_ASSOC);
