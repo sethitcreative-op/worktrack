@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Download, CheckCircle, Clock, Filter, Settings, Calendar as CalendarIcon, ChevronDown, CalendarDays, Users, ListFilter, Edit, Trash2, Plus, X } from 'lucide-react';
+import { Download, CheckCircle, Clock, Filter, Settings, Calendar as CalendarIcon, ChevronDown, CalendarDays, Users, ListFilter, Edit, Trash2, Plus, X, RotateCcw } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 import './AdminDtrPage.css';
 import API_BASE from '../../config/api';
@@ -252,6 +252,79 @@ const AdminDtrPage = () => {
     isCustomHours: false
   });
 
+  // Grand Total Edit State & Overrides
+  const [editedGrandTotals, setEditedGrandTotals] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dtr_edited_grand_totals');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const [grandTotalModal, setGrandTotalModal] = useState({
+    isOpen: false,
+    userId: null,
+    employeeName: '',
+    calculatedHours: 0,
+    overrideHours: '',
+    periodKey: ''
+  });
+
+  const getGrandTotalOverride = (empId) => {
+    if (!empId) return undefined;
+    const periodKey = `${dtrFilterType}_${dtrFilterValue}`;
+    const key = `${empId}_${periodKey}`;
+    return editedGrandTotals[key];
+  };
+
+  const openGrandTotalModal = (empId, empName, calcHours) => {
+    const periodKey = `${dtrFilterType}_${dtrFilterValue}`;
+    const key = `${empId}_${periodKey}`;
+    const existing = editedGrandTotals[key];
+    setGrandTotalModal({
+      isOpen: true,
+      userId: empId,
+      employeeName: empName || 'Employee',
+      calculatedHours: calcHours,
+      overrideHours: existing !== undefined ? String(existing) : String(calcHours),
+      periodKey
+    });
+  };
+
+  const saveGrandTotalOverride = () => {
+    const { userId, periodKey, overrideHours, employeeName } = grandTotalModal;
+    const key = `${userId}_${periodKey}`;
+    const val = parseFloat(overrideHours);
+    if (isNaN(val) || val < 0) {
+      alert("Please enter a valid number of hours.");
+      return;
+    }
+    const updated = { ...editedGrandTotals, [key]: val };
+    setEditedGrandTotals(updated);
+    try {
+      localStorage.setItem('dtr_edited_grand_totals', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+    logSystemAction('EDIT_GRAND_TOTAL', `Admin edited Grand Total for ${employeeName} (${periodKey}) to ${val} hrs.`);
+    setGrandTotalModal(prev => ({ ...prev, isOpen: false }));
+  };
+
+  const resetGrandTotalOverride = (empId, empName) => {
+    const periodKey = `${dtrFilterType}_${dtrFilterValue}`;
+    const key = `${empId}_${periodKey}`;
+    const updated = { ...editedGrandTotals };
+    delete updated[key];
+    setEditedGrandTotals(updated);
+    try {
+      localStorage.setItem('dtr_edited_grand_totals', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+    logSystemAction('RESET_GRAND_TOTAL', `Admin reset Grand Total for ${empName} (${periodKey}) to auto-calculated.`);
+  };
+
   const handleFilterTypeChange = (e) => {
     const type = e.target.value;
     setDtrFilterType(type);
@@ -407,6 +480,10 @@ const AdminDtrPage = () => {
       const existingHours = rawHours !== null && !isNaN(rawHours) && rawHours > 0
         ? String(rawHours)
         : '';
+      const calcIfEmpty = empType !== 'Fixed' && (amInVal || amOutVal || pmInVal || pmOutVal)
+        ? calculateTimedTotalHours(amInVal, amOutVal, pmInVal, pmOutVal, record.date)
+        : 0;
+      const initialHours = existingHours || (empType === 'Fixed' ? '10' : (calcIfEmpty > 0 ? String(calcIfEmpty) : ''));
 
       setEditModal({
         isOpen: true,
@@ -420,9 +497,9 @@ const AdminDtrPage = () => {
         amOut: amOutVal,
         pmIn: pmInVal,
         pmOut: pmOutVal,
-        totalHours: existingHours || (empType === 'Fixed' ? '10' : ''),
+        totalHours: initialHours,
         status: record.status || 'Present',
-        isCustomHours: !!existingHours
+        isCustomHours: false
       });
     } else {
       setEditModal({
@@ -487,6 +564,12 @@ const AdminDtrPage = () => {
           ? '1900-01-01 00:00:00'
           : (editModal.pmOut ? `${editModal.dateStr} ${editModal.pmOut}` : '');
         totalHoursVal = editModal.totalHours;
+        if (!totalHoursVal) {
+          const autoCalc = calculateTimedTotalHours(editModal.amIn, editModal.amOut, editModal.pmIn, editModal.pmOut, editModal.dateStr);
+          if (autoCalc > 0) {
+            totalHoursVal = String(autoCalc);
+          }
+        }
       }
 
       const payload = {
@@ -726,7 +809,7 @@ const AdminDtrPage = () => {
   const exportWeeklySchedulePDF = (startStr, endStr, usersToExport, exportType = 'weekly') => {
     const doc = new jsPDF({ orientation: 'landscape' });
 
-    doc.setFontSize(22);
+    doc.setFontSize(24);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 41, 59);
     
@@ -736,7 +819,7 @@ const AdminDtrPage = () => {
 
     doc.text(reportTitle, 148.5, 20, { align: "center" });
 
-    doc.setFontSize(11);
+    doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(100, 116, 139);
 
@@ -790,7 +873,8 @@ const AdminDtrPage = () => {
     let grandTotalEarnings = 0;
 
     const tableRows = Object.values(grouped).map(record => {
-      const hrs = parseFloat(record.total_hours || 0);
+      const overrideHrs = getGrandTotalOverride(record.user_id);
+      const hrs = overrideHrs !== undefined ? overrideHrs : parseFloat(record.total_hours || 0);
       const days = parseInt(record.days_worked || 0);
       const isFixed = record.employee_type === 'Fixed';
       const rate = isFixed ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
@@ -828,14 +912,15 @@ const AdminDtrPage = () => {
       body: tableRows,
       startY: 40,
       theme: 'grid',
-      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 13, cellPadding: 8 },
+      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 13, cellPadding: 8 },
       alternateRowStyles: { fillColor: [255, 255, 255] },
-      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      styles: { font: 'helvetica', fontSize: 13, cellPadding: 8, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
       didParseCell: function (data) {
         if (data.row.raw[0] === 'GRAND TOTAL') {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = [200, 240, 210];
+          data.cell.styles.fontSize = 13;
         }
       }
     });
@@ -843,7 +928,7 @@ const AdminDtrPage = () => {
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
-      doc.setFontSize(9);
+      doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(100, 116, 139);
       doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
@@ -860,12 +945,12 @@ const AdminDtrPage = () => {
   const exportFixedReportPDF = (startStr, endStr, category, dateType, dateValue, usersToExport) => {
     const doc = new jsPDF({ orientation: 'landscape' });
 
-    doc.setFontSize(22);
+    doc.setFontSize(24);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 41, 59);
     doc.text(`Report Salary - ${category}`, 148.5, 20, { align: "center" });
 
-    doc.setFontSize(11);
+    doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(100, 116, 139);
 
@@ -940,7 +1025,8 @@ const AdminDtrPage = () => {
     let currentY = 40;
 
     Object.values(grouped).forEach((record, index) => {
-      const hrs = parseFloat(record.total_hours || 0);
+      const overrideHrs = getGrandTotalOverride(record.user_id);
+      const hrs = overrideHrs !== undefined ? overrideHrs : parseFloat(record.total_hours || 0);
       const days = parseInt(record.days_worked || 0);
       const isFixedUser = record.employee_type === 'Fixed';
       const rate = isFixedUser ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
@@ -984,19 +1070,19 @@ const AdminDtrPage = () => {
         currentY = 20;
       }
 
-      doc.setFontSize(12);
+      doc.setFontSize(14);
       doc.setTextColor(30, 41, 59);
       doc.text(`Salary Slip - ${record.full_name}`, 14, currentY);
 
       autoTable(doc, {
         head: [tableColumn],
         body: [row],
-        startY: currentY + 5,
+        startY: currentY + 6,
         theme: 'grid',
-        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-        bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 8 },
+        bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 8 },
         alternateRowStyles: { fillColor: [248, 250, 252] },
-        styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+        styles: { font: 'helvetica', fontSize: 12, cellPadding: 8, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
       });
 
       currentY = doc.lastAutoTable.finalY + 20;
@@ -1007,7 +1093,7 @@ const AdminDtrPage = () => {
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
-      doc.setFontSize(9);
+      doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(100, 116, 139);
       doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
@@ -1072,15 +1158,15 @@ const AdminDtrPage = () => {
       // --- Header Rendering ---
       // Impact Pro PH - Employee Timecard
       doc.setFillColor(146, 208, 80); // Green color from image
-      doc.rect(14, 15, 120, 8, 'F');
-      doc.setFontSize(14);
+      doc.rect(14, 15, 181, 10, 'F');
+      doc.setFontSize(15);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(0, 0, 0);
-      doc.text("Impact Pro PH - Employee Timecard", 16, 21);
+      doc.text("Impact Pro PH - Employee Timecard", 16, 22);
 
-      doc.setFontSize(10);
+      doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text("Pay Cycle:", 14, 32);
+      doc.text("Pay Cycle:", 14, 33);
 
       doc.setFont("helvetica", "normal");
 
@@ -1098,37 +1184,39 @@ const AdminDtrPage = () => {
       } else {
         cycleText = `${startStr} to ${endStr}`;
       }
-      doc.text(cycleText, 55, 32);
+      doc.text(cycleText, 55, 33);
 
       doc.setFont("helvetica", "bold");
-      doc.text("Rate per Hour:", 14, 38);
+      doc.text("Rate per Hour:", 14, 40);
 
       doc.setFillColor(226, 239, 218); // Light green background for rate
-      doc.rect(53, 33, 35, 6, 'F');
+      doc.rect(53, 34, 40, 7, 'F');
       doc.setFont("helvetica", "normal");
-      doc.text(rate.toFixed(2), 86, 38, { align: "right" });
+      doc.text(rate.toFixed(2), 90, 39.5, { align: "right" });
 
       // EMPLOYEE row
       doc.setFillColor(255, 255, 0); // Yellow
-      doc.rect(14, 45, 120, 8, 'F');
+      doc.rect(14, 48, 181, 9, 'F');
       doc.setFont("helvetica", "bold");
-      doc.text(`EMPLOYEE: ${emp.full_name}`, 16, 50.5);
+      doc.setFontSize(12);
+      doc.text(`EMPLOYEE: ${emp.full_name}`, 16, 54.5);
 
       // Pay Period
-      doc.text("Pay Period:", 14, 65);
+      doc.setFontSize(11);
+      doc.text("Pay Period:", 14, 68);
 
       // START / END Headers
-      doc.text("START", 73, 59, { align: "center" });
-      doc.text("END", 107.5, 59, { align: "center" });
+      doc.text("START", 83, 62, { align: "center" });
+      doc.text("END", 125, 62, { align: "center" });
 
       // drawing a rect for the dates
       doc.setFillColor(255, 255, 0);
-      doc.rect(53, 60, 40, 7, 'F'); // START date rect
-      doc.rect(95, 60, 25, 7, 'F'); // END date rect
+      doc.rect(63, 63, 40, 7, 'F'); // START date rect
+      doc.rect(105, 63, 40, 7, 'F'); // END date rect
 
       doc.setFont("helvetica", "normal");
-      doc.text(formatShortDate(startStr), 73, 65, { align: "center" });
-      doc.text(formatShortDate(endStr), 107.5, 65, { align: "center" });
+      doc.text(formatShortDate(startStr), 83, 68, { align: "center" });
+      doc.text(formatShortDate(endStr), 125, 68, { align: "center" });
 
       // Table Generation
       const tableRows = [];
@@ -1163,7 +1251,7 @@ const AdminDtrPage = () => {
       });
 
       autoTable(doc, {
-        startY: 75,
+        startY: 78,
         head: [['Day', 'Hours Worked', 'Daily Pay']],
         body: tableRows,
         theme: 'plain',
@@ -1171,33 +1259,39 @@ const AdminDtrPage = () => {
           fillColor: [217, 225, 242], // Light blue
           textColor: [0, 0, 0],
           fontStyle: 'bold',
-          lineWidth: 0.1,
-          lineColor: [200, 200, 200],
-          cellPadding: { top: 3, right: 2, bottom: 3, left: 2 }
+          fontSize: 12,
+          lineWidth: 0.2,
+          lineColor: [180, 180, 180],
+          cellPadding: { top: 5, right: 6, bottom: 5, left: 6 }
         },
         bodyStyles: {
           textColor: [0, 0, 0],
-          lineWidth: 0.1,
+          fontSize: 11,
+          lineWidth: 0.2,
           lineColor: [200, 200, 200],
-          cellPadding: { top: 3, right: 2, bottom: 3, left: 2 }
+          cellPadding: { top: 5, right: 6, bottom: 5, left: 6 }
         },
         columnStyles: {
-          0: { cellWidth: 70 },
-          1: { cellWidth: 28, halign: 'right' },
-          2: { cellWidth: 28, halign: 'right' }
+          0: { cellWidth: 95 },
+          1: { cellWidth: 43, halign: 'right' },
+          2: { cellWidth: 43, halign: 'right' }
         }
       });
 
       const finalY = doc.lastAutoTable.finalY;
 
       doc.setFillColor(252, 228, 214); // Light orange
-      doc.rect(14, finalY, 181, 8, 'F');
+      doc.rect(14, finalY, 181, 9, 'F');
 
-      doc.setFontSize(10);
+      doc.setFontSize(12);
       doc.setFont("helvetica", "bold");
 
-      doc.text(totalHrs.toFixed(2), 110, finalY + 5, { align: "right" });
-      doc.text(`$${totalPay.toFixed(2)}`, 138, finalY + 5, { align: "right" });
+      const grandOverride = getGrandTotalOverride(emp.id);
+      const finalTotalHrs = grandOverride !== undefined ? grandOverride : totalHrs;
+      const finalTotalPay = grandOverride !== undefined ? (grandOverride * rate) : totalPay;
+
+      doc.text(finalTotalHrs.toFixed(2), 150, finalY + 6.5, { align: "right" });
+      doc.text(`$${finalTotalPay.toFixed(2)}`, 193, finalY + 6.5, { align: "right" });
     });
 
     let periodStr = "";
@@ -1309,7 +1403,9 @@ const AdminDtrPage = () => {
             else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
               virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
             }
-            else virtualStatus = 'ABSENT';
+            else {
+              virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
+            }
           } else if (pendingReschedule) {
             virtualStatus = 'PENDING RESCHEDULE';
           } else if (pendingNew) {
@@ -1375,12 +1471,12 @@ const AdminDtrPage = () => {
     });
 
     const doc = new jsPDF({ orientation: 'landscape' });
-    doc.setFontSize(22);
+    doc.setFontSize(24);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 41, 59);
     doc.text(`Payroll Report - ${category}`, 148.5, 20, { align: "center" });
 
-    doc.setFontSize(11);
+    doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(100, 116, 139);
 
@@ -1442,7 +1538,8 @@ const AdminDtrPage = () => {
     const tableRows = [];
     recordsToProcess.forEach(record => {
       const rowData = [];
-      const recordHrs = parseFloat(record.total_hours || 0);
+      const overrideHrs = getGrandTotalOverride(record.user_id);
+      const recordHrs = overrideHrs !== undefined ? overrideHrs : parseFloat(record.total_hours || 0);
       const recordRate = parseFloat(record.hourly_rate || employees.find(e => String(e.id) === String(record.user_id))?.hourly_rate || 0);
       const recordEarnings = recordHrs * recordRate;
 
@@ -1465,7 +1562,7 @@ const AdminDtrPage = () => {
         else if (key === 'pm_in') rowData.push(isSpecialStatus ? '---' : (record.pm_in ? formatTime(record.pm_in, record.date) : '--:--'));
         else if (key === 'pm_out') rowData.push(isSpecialStatus ? '---' : (record.pm_out ? formatTime(record.pm_out, record.date) : '--:--'));
 
-        else if (key === 'total_hours') rowData.push(isLeave ? '8h' : (isSpecialStatus ? '---' : (record.total_hours ? formatHoursDuration(record.total_hours) : '0h')));
+        else if (key === 'total_hours') rowData.push(isLeave ? '8h' : (isSpecialStatus ? '---' : (record.total_hours ? formatHoursDuration(recordHrs) : '0h')));
         else if (key === 'hourly_rate') rowData.push(isSpecialStatus ? '' : `${recordRate.toFixed(2)}`);
         else if (key === 'earnings') rowData.push(isSpecialStatus ? '' : (recordEarnings > 0 ? `${recordEarnings.toFixed(2)}` : '-- -- --'));
       });
@@ -1487,14 +1584,15 @@ const AdminDtrPage = () => {
       body: tableRows,
       startY: 40,
       theme: 'grid',
-      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 7 },
+      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 7 },
       alternateRowStyles: { fillColor: [255, 255, 255] },
-      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      styles: { font: 'helvetica', fontSize: 12, cellPadding: 7, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
       didParseCell: function (data) {
         if (data.row.raw[0] === 'GRAND TOTAL') {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = [200, 240, 210];
+          data.cell.styles.fontSize = 12;
         }
       }
     });
@@ -1502,7 +1600,7 @@ const AdminDtrPage = () => {
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
-      doc.setFontSize(9);
+      doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(100, 116, 139);
       doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
@@ -1537,48 +1635,72 @@ const AdminDtrPage = () => {
           let totalLeave = 0;
           let totalAbsent = 0;
 
+          // Respect active filters for employee type and specific user, and exclude deactivated employees
+          const activeEmployees = employees.filter(emp => {
+            if (emp.is_active !== undefined && parseInt(emp.is_active) === 0) return false;
+            if (tableFilterType !== 'all' && (emp.employee_type || 'Timed') !== tableFilterType) return false;
+            if (tableFilterUser !== 'all' && String(emp.id) !== String(tableFilterUser)) return false;
+            return true;
+          });
+
           filteredDays.forEach(d => {
             const dayStr = d.dateStr;
-            employees.forEach(emp => {
-              // Check if employee has an approved scheduled shift for this day (not a holiday/leave)
-              const isScheduled = events.some(e =>
+            const isPast = dayStr < todayDateStr;
+
+            activeEmployees.forEach(emp => {
+              // Find record if exists for this date and employee
+              const row = records.find(r => r.date === dayStr && String(r.user_id) === String(emp.id));
+
+              // Check for approved leave
+              const isOnLeave = leaveRequests.some(lr =>
+                String(lr.user_id) === String(emp.id) &&
+                dayStr >= lr.start_date &&
+                dayStr <= lr.end_date &&
+                (lr.status === 'approved' || lr.status === 'Approved')
+              ) || (row && (row.status === 'Leave' || row.status === 'Approved Leave'));
+
+              // Check for holiday
+              const isHoliday = events.some(e =>
                 e.event_date === dayStr &&
-                (e.user_id == emp.id || e.user_id == 0) &&
+                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
                 e.status === 'approved' &&
-                e.event_type !== 'Holiday' &&
-                e.event_type !== 'HL' &&
-                e.event_type !== 'VL'
+                (e.event_type === 'Holiday' || e.event_type === 'HL')
+              ) || (row && row.status === 'Holiday');
+
+              // Check if scheduled event in calendar
+              const isScheduledEvent = events.some(e =>
+                e.event_date === dayStr &&
+                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
+                e.status === 'approved' &&
+                (e.event_type === 'WS' || e.title === 'Work Shift' || (e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'VL'))
               );
 
-              // Check if employee clocked in or is marked present
-              const isPresent = records.some(r =>
-                r.date === dayStr &&
-                r.user_id == emp.id &&
-                ((r.am_in && !r.am_in.includes('1900-01-01')) ||
-                  (r.pm_in && !r.pm_in.includes('1900-01-01')) ||
-                  r.status === 'Present' ||
-                  r.status === 'Late')
-              );
+              // Check if clocked in or marked present
+              const isPresent = !isHoliday && (row && (
+                (row.am_in && !row.am_in.includes('1900-01-01')) ||
+                (row.pm_in && !row.pm_in.includes('1900-01-01')) ||
+                row.status === 'Present' ||
+                row.status === 'Late' ||
+                row.status === 'Missing Timeout' ||
+                (parseFloat(row.total_hours) > 0)
+              ));
 
-              // Check if employee has an approved leave request covering this day
-              const isOnLeave = leaveRequests.some(lr => {
-                const s = new Date(lr.start_date);
-                const e = new Date(lr.end_date);
-                const t = new Date(dayStr);
-                s.setHours(0, 0, 0, 0); e.setHours(0, 0, 0, 0); t.setHours(0, 0, 0, 0);
-                return lr.user_id == emp.id && t >= s && t <= e && lr.status === 'approved';
-              });
+              // Explicit absent in record
+              const isExplicitAbsent = !isPresent && (row && row.status === 'Absent');
+
+              // Scheduled shift in the past missed (not present, not on leave, not a holiday)
+              const isMissedScheduledShift = !isPresent && !isOnLeave && !isHoliday && isScheduledEvent && isPast;
+
+              const isAbsent = isExplicitAbsent || isMissedScheduledShift;
+
+              // Total scheduled days includes all actual shifts worked, explicit absences, approved leaves, and approved scheduled shifts
+              const isScheduled = isScheduledEvent || isPresent || isExplicitAbsent || (isOnLeave && !isHoliday);
 
               if (isPresent) totalPresent++;
-              if (isOnLeave) totalLeave++;
+              else if (isOnLeave) totalLeave++;
+              else if (isAbsent) totalAbsent++;
 
-              if (isScheduled) {
-                totalScheduled++;
-                // They are absent ONLY if they were scheduled but didn't show up and are not on leave
-                if (!isPresent && !isOnLeave) {
-                  totalAbsent++;
-                }
-              }
+              if (isScheduled) totalScheduled++;
             });
           });
 
@@ -2232,7 +2354,9 @@ const AdminDtrPage = () => {
                                   else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
                                     virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
                                   }
-                                  else virtualStatus = 'ABSENT';
+                                  else {
+                                    virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
+                                  }
                                 } else if (pendingReschedule) {
                                   virtualStatus = 'PENDING RESCHEDULE';
                                 } else if (pendingNew) {
@@ -2334,20 +2458,69 @@ const AdminDtrPage = () => {
                               </tr>
                             );
                           })}
-                          <tr className="grand-total-row">
-                            <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
-                            <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
-                              {displayUser?.employee_type === 'Fixed' ? '' : (grandTotalHrs > 0 ? formatHoursDuration(grandTotalHrs) : '')}
-                            </td>
-                            {isAdmin && displayUser?.employee_type !== 'Fixed' && <td></td>}
-                            {isAdmin && displayUser?.employee_type === 'Fixed' && (
-                              <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
-                                {formatHoursDuration(grandTotalHrs)}
-                              </td>
-                            )}
-                            <td></td>
-                            {isAdmin && <td></td>}
-                          </tr>
+                          {(() => {
+                            const overrideVal = getGrandTotalOverride(displayUser?.id);
+                            const isEdited = overrideVal !== undefined;
+                            const finalHrs = isEdited ? overrideVal : grandTotalHrs;
+
+                            return (
+                              <tr className="grand-total-row">
+                                <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
+                                <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
+                                  {displayUser?.employee_type === 'Fixed' ? '' : (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                      <span>{finalHrs > 0 ? formatHoursDuration(finalHrs) : '0hrs 0mins'}</span>
+                                      {isEdited && (
+                                        <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                          Manual
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                                {isAdmin && displayUser?.employee_type !== 'Fixed' && <td></td>}
+                                {isAdmin && displayUser?.employee_type === 'Fixed' && (
+                                  <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                      <span>{formatHoursDuration(finalHrs)}</span>
+                                      {isEdited && (
+                                        <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                          Manual
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                )}
+                                <td></td>
+                                {isAdmin && (
+                                  <td style={{ textAlign: 'center' }}>
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                                      <button
+                                        type="button"
+                                        className="btn-icon text-primary"
+                                        onClick={() => openGrandTotalModal(displayUser?.id, displayUser?.full_name, grandTotalHrs)}
+                                        title="Edit Grand Total"
+                                        style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', cursor: 'pointer', color: 'var(--primary)', padding: '4px 8px', borderRadius: '6px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
+                                      >
+                                        <Edit size={13} /> Edit
+                                      </button>
+                                      {isEdited && (
+                                        <button
+                                          type="button"
+                                          className="btn-icon"
+                                          onClick={() => resetGrandTotalOverride(displayUser?.id, displayUser?.full_name)}
+                                          title="Reset to Calculated"
+                                          style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', color: 'var(--danger)', padding: '4px 6px', borderRadius: '6px' }}
+                                        >
+                                          <RotateCcw size={13} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })()}
                         </>
                       );
                     })()}
@@ -2433,7 +2606,9 @@ const AdminDtrPage = () => {
                                 else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
                                   virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
                                 }
-                                else virtualStatus = 'ABSENT';
+                                else {
+                                  virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
+                                }
                               } else if (pendingReschedule) {
                                 virtualStatus = 'PENDING RESCHEDULE';
                               } else if (pendingNew) {
@@ -2533,20 +2708,69 @@ const AdminDtrPage = () => {
                             </tr>
                           );
                         })}
-                        <tr className="grand-total-row">
-                          <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
-                          <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
-                            {emp.employee_type === 'Fixed' ? '' : (grandTotalHrs > 0 ? formatHoursDuration(grandTotalHrs) : '')}
-                          </td>
-                          {isAdmin && emp.employee_type !== 'Fixed' && <td></td>}
-                          {isAdmin && emp.employee_type === 'Fixed' && (
-                            <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
-                              {formatHoursDuration(grandTotalHrs)}
-                            </td>
-                          )}
-                          <td></td>
-                          {isAdmin && <td></td>}
-                        </tr>
+                        {(() => {
+                          const overrideVal = getGrandTotalOverride(emp.id);
+                          const isEdited = overrideVal !== undefined;
+                          const finalHrs = isEdited ? overrideVal : grandTotalHrs;
+
+                          return (
+                            <tr className="grand-total-row">
+                              <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
+                              <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
+                                {emp.employee_type === 'Fixed' ? '' : (
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                    <span>{finalHrs > 0 ? formatHoursDuration(finalHrs) : '0hrs 0mins'}</span>
+                                    {isEdited && (
+                                      <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                        Manual
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                              {isAdmin && emp.employee_type !== 'Fixed' && <td></td>}
+                              {isAdmin && emp.employee_type === 'Fixed' && (
+                                <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
+                                    <span>{formatHoursDuration(finalHrs)}</span>
+                                    {isEdited && (
+                                      <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                        Manual
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                              )}
+                              <td></td>
+                              {isAdmin && (
+                                <td style={{ textAlign: 'center' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                                    <button
+                                      type="button"
+                                      className="btn-icon text-primary"
+                                      onClick={() => openGrandTotalModal(emp.id, emp.full_name, grandTotalHrs)}
+                                      title="Edit Grand Total"
+                                      style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', cursor: 'pointer', color: 'var(--primary)', padding: '4px 8px', borderRadius: '6px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
+                                    >
+                                      <Edit size={13} /> Edit
+                                    </button>
+                                    {isEdited && (
+                                      <button
+                                        type="button"
+                                        className="btn-icon"
+                                        onClick={() => resetGrandTotalOverride(emp.id, emp.full_name)}
+                                        title="Reset to Calculated"
+                                        style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', color: 'var(--danger)', padding: '4px 6px', borderRadius: '6px' }}
+                                      >
+                                        <RotateCcw size={13} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })()}
                       </tbody>
                     </table>
                   </div>
@@ -2705,7 +2929,8 @@ const AdminDtrPage = () => {
                                     setEditModal({
                                       ...editModal,
                                       amIn: val,
-                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                      totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                      isCustomHours: false
                                     });
                                   }}
                                   disabled={isSpecialStatus}
@@ -2728,7 +2953,8 @@ const AdminDtrPage = () => {
                                   setEditModal({
                                     ...editModal,
                                     amIn: val,
-                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                    isCustomHours: false
                                   });
                                 }}
                                 disabled={isSpecialStatus}
@@ -2750,7 +2976,8 @@ const AdminDtrPage = () => {
                                     setEditModal({
                                       ...editModal,
                                       amOut: val,
-                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                      totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                      isCustomHours: false
                                     });
                                   }}
                                   disabled={isSpecialStatus}
@@ -2773,7 +3000,8 @@ const AdminDtrPage = () => {
                                   setEditModal({
                                     ...editModal,
                                     amOut: val,
-                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                    isCustomHours: false
                                   });
                                 }}
                                 disabled={isSpecialStatus}
@@ -2803,7 +3031,8 @@ const AdminDtrPage = () => {
                                     setEditModal({
                                       ...editModal,
                                       pmIn: val,
-                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                      totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                      isCustomHours: false
                                     });
                                   }}
                                   disabled={isSpecialStatus}
@@ -2826,7 +3055,8 @@ const AdminDtrPage = () => {
                                   setEditModal({
                                     ...editModal,
                                     pmIn: val,
-                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                    isCustomHours: false
                                   });
                                 }}
                                 disabled={isSpecialStatus}
@@ -2848,7 +3078,8 @@ const AdminDtrPage = () => {
                                     setEditModal({
                                       ...editModal,
                                       pmOut: val,
-                                      totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : ''),
+                                      totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                      isCustomHours: false,
                                       status: e.target.checked ? 'Missing Timeout' : (editModal.status === 'Missing Timeout' ? 'Present' : editModal.status)
                                     });
                                   }}
@@ -2872,7 +3103,8 @@ const AdminDtrPage = () => {
                                   setEditModal({
                                     ...editModal,
                                     pmOut: val,
-                                    totalHours: editModal.isCustomHours ? editModal.totalHours : (newCalculated > 0 ? String(newCalculated) : '')
+                                    totalHours: newCalculated > 0 ? String(newCalculated) : '',
+                                    isCustomHours: false
                                   });
                                 }}
                                 disabled={isSpecialStatus}
@@ -2963,6 +3195,99 @@ const AdminDtrPage = () => {
           </div>
         );
       })()}
+
+      {/* Admin Edit Grand Total Modal */}
+      {grandTotalModal.isOpen && (
+        <div className="dtr-modal-overlay">
+          <div className="dtr-modal-content" style={{ maxWidth: '440px' }}>
+            <div className="dtr-modal-header">
+              <div>
+                <h3 className="dtr-modal-title">Edit Grand Total</h3>
+                <span className="dtr-modal-subtitle">{grandTotalModal.employeeName}</span>
+              </div>
+              <button
+                type="button"
+                className="dtr-modal-close"
+                onClick={() => setGrandTotalModal(prev => ({ ...prev, isOpen: false }))}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="dtr-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px' }}>
+              <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: '10px', padding: '12px 16px' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Auto-Calculated Total</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)', marginTop: '2px' }}>
+                  {formatHoursDuration(grandTotalModal.calculatedHours)} ({grandTotalModal.calculatedHours.toFixed(2)}h)
+                </div>
+              </div>
+
+              <div className="premium-select-group">
+                <label style={{ fontWeight: 600, fontSize: '0.85rem' }}>Grand Total Hours</label>
+                <input
+                  type="number"
+                  step="0.25"
+                  min="0"
+                  className="premium-input"
+                  value={grandTotalModal.overrideHours}
+                  onChange={(e) => setGrandTotalModal({ ...grandTotalModal, overrideHours: e.target.value })}
+                  placeholder="e.g. 40.0"
+                  style={{ width: '100%', fontSize: '1.1rem', fontWeight: 700 }}
+                  autoFocus
+                />
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Formatted: {formatHoursDuration(parseFloat(grandTotalModal.overrideHours) || 0)}
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  onClick={() => setGrandTotalModal({ ...grandTotalModal, overrideHours: String(grandTotalModal.calculatedHours) })}
+                >
+                  Use Auto ({grandTotalModal.calculatedHours}h)
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  onClick={() => setGrandTotalModal({ ...grandTotalModal, overrideHours: '40' })}
+                >
+                  40h
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  onClick={() => setGrandTotalModal({ ...grandTotalModal, overrideHours: '48' })}
+                >
+                  48h
+                </button>
+              </div>
+            </div>
+
+            <div className="dtr-modal-footer" style={{ padding: '16px 20px', borderTop: '1px solid var(--glass-border)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setGrandTotalModal(prev => ({ ...prev, isOpen: false }))}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ padding: '8px 20px', fontWeight: 600 }}
+                onClick={saveGrandTotalOverride}
+              >
+                Save Grand Total
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

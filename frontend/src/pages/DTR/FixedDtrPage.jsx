@@ -817,14 +817,15 @@ const FixedDtrPage = () => {
       body: tableRows,
       startY: 40,
       theme: 'grid',
-      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
-      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      headStyles: { fillColor: [200, 240, 210], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 7 },
+      bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 7 },
       alternateRowStyles: { fillColor: [255, 255, 255] },
-      styles: { font: 'helvetica', fontSize: 10, cellPadding: 6, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+      styles: { font: 'helvetica', fontSize: 12, cellPadding: 7, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
       didParseCell: function (data) {
         if (data.row.raw[0] === 'GRAND TOTAL') {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.fillColor = [200, 240, 210];
+          data.cell.styles.fontSize = 12;
         }
       }
     });
@@ -832,7 +833,7 @@ const FixedDtrPage = () => {
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
-      doc.setFontSize(9);
+      doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(100, 116, 139);
       doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
@@ -867,48 +868,71 @@ const FixedDtrPage = () => {
           let totalLeave = 0;
           let totalAbsent = 0;
 
+          // Respect active filters for employee type and specific user, and exclude deactivated employees
+          const activeEmployees = employees.filter(emp => {
+            if (emp.is_active !== undefined && parseInt(emp.is_active) === 0) return false;
+            if (tableFilterUser !== 'all' && String(emp.id) !== String(tableFilterUser)) return false;
+            return true;
+          });
+
           filteredDays.forEach(d => {
             const dayStr = d.dateStr;
-            employees.forEach(emp => {
-              // Check if employee has an approved scheduled shift for this day (not a holiday/leave)
-              const isScheduled = events.some(e =>
+            const isPast = dayStr < todayDateStr;
+
+            activeEmployees.forEach(emp => {
+              // Find record if exists for this date and employee
+              const row = records.find(r => r.date === dayStr && String(r.user_id) === String(emp.id));
+
+              // Check for approved leave
+              const isOnLeave = leaveRequests.some(lr =>
+                String(lr.user_id) === String(emp.id) &&
+                dayStr >= lr.start_date &&
+                dayStr <= lr.end_date &&
+                (lr.status === 'approved' || lr.status === 'Approved')
+              ) || (row && (row.status === 'Leave' || row.status === 'Approved Leave'));
+
+              // Check for holiday
+              const isHoliday = events.some(e =>
                 e.event_date === dayStr &&
-                (e.user_id == emp.id || e.user_id == 0) &&
+                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
                 e.status === 'approved' &&
-                e.event_type !== 'Holiday' &&
-                e.event_type !== 'HL' &&
-                e.event_type !== 'VL'
+                (e.event_type === 'Holiday' || e.event_type === 'HL')
+              ) || (row && row.status === 'Holiday');
+
+              // Check if scheduled event in calendar
+              const isScheduledEvent = events.some(e =>
+                e.event_date === dayStr &&
+                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
+                e.status === 'approved' &&
+                (e.event_type === 'WS' || e.title === 'Work Shift' || (e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'VL'))
               );
 
-              // Check if employee clocked in or is marked present
-              const isPresent = records.some(r =>
-                r.date === dayStr &&
-                r.user_id == emp.id &&
-                ((r.am_in && !r.am_in.includes('1900-01-01')) ||
-                  (r.pm_in && !r.pm_in.includes('1900-01-01')) ||
-                  r.status === 'Present' ||
-                  r.status === 'Late')
-              );
+              // Check if clocked in or marked present
+              const isPresent = !isHoliday && (row && (
+                (row.am_in && !row.am_in.includes('1900-01-01')) ||
+                (row.pm_in && !row.pm_in.includes('1900-01-01')) ||
+                row.status === 'Present' ||
+                row.status === 'Late' ||
+                row.status === 'Missing Timeout' ||
+                (parseFloat(row.total_hours) > 0)
+              ));
 
-              // Check if employee has an approved leave request covering this day
-              const isOnLeave = leaveRequests.some(lr => {
-                const s = new Date(lr.start_date);
-                const e = new Date(lr.end_date);
-                const t = new Date(dayStr);
-                s.setHours(0, 0, 0, 0); e.setHours(0, 0, 0, 0); t.setHours(0, 0, 0, 0);
-                return lr.user_id == emp.id && t >= s && t <= e && lr.status === 'approved';
-              });
+              // Explicit absent in record
+              const isExplicitAbsent = !isPresent && (row && row.status === 'Absent');
+
+              // Scheduled shift in the past missed (not present, not on leave, not a holiday)
+              const isMissedScheduledShift = !isPresent && !isOnLeave && !isHoliday && isScheduledEvent && isPast;
+
+              const isAbsent = isExplicitAbsent || isMissedScheduledShift;
+
+              // Total scheduled days includes all actual shifts worked, explicit absences, approved leaves, and approved scheduled shifts
+              const isScheduled = isScheduledEvent || isPresent || isExplicitAbsent || (isOnLeave && !isHoliday);
 
               if (isPresent) totalPresent++;
-              if (isOnLeave) totalLeave++;
+              else if (isOnLeave) totalLeave++;
+              else if (isAbsent) totalAbsent++;
 
-              if (isScheduled) {
-                totalScheduled++;
-                // They are absent ONLY if they were scheduled but didn't show up and are not on leave
-                if (!isPresent && !isOnLeave) {
-                  totalAbsent++;
-                }
-              }
+              if (isScheduled) totalScheduled++;
             });
           });
 

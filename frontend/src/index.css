@@ -243,9 +243,9 @@ input[type="month"].input-field {
 /* Layout */
 .app-container {
   display: flex;
-  height: 125vh;
-  width: 125vw;
-  zoom: 0.8;
+  height: calc(100vh / 0.9);
+  width: calc(100vw / 0.9);
+  zoom: .90;
 }
 
 .main-content {
