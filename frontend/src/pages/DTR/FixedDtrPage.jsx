@@ -174,13 +174,13 @@ const FixedDtrPage = () => {
   };
 
 
-  // Helper: format decimal hours (e.g. 8.5) to "HH:MM:SS"
+  // Helper: format decimal hours (e.g. 8.5) to "Xhrs Ymins"
   const formatHoursDuration = (decimalHours) => {
     const val = parseFloat(decimalHours);
     if (!val || isNaN(val) || val === 0) return '0hrs 0mins';
-    const totalSeconds = Math.round(val * 3600);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const totalMinutes = Math.round(val * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
 
     return `${hours}hrs ${minutes}mins`;
   };
@@ -193,7 +193,7 @@ const FixedDtrPage = () => {
   const [customExportUsers, setCustomExportUsers] = useState(['all']);
   const [tableFilterUser, setTableFilterUser] = useState('all');
   const [fixedReportCategory, setFixedReportCategory] = useState('Timed');
-  const [fixedReportDateType, setFixedReportDateType] = useState('month');
+  const [fixedReportDateType, setFixedReportDateType] = useState('week');
   const [fixedReportDateValue, setFixedReportDateValue] = useState(() => new Date().toISOString().slice(0, 7));
   const [fixedReportUsers, setFixedReportUsers] = useState(['all']);
   const [pdfColumns, setPdfColumns] = useState({
@@ -334,8 +334,12 @@ const FixedDtrPage = () => {
         ? `${API_BASE}/dtr.php?action=get_records`
         : `${API_BASE}/dtr.php?action=get_records&user_id=${user.id}`;
       const res = await axios.get(url);
-      if (res.data.status === 'success') {
-        setRecords(res.data.data);
+      let data = res.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) {}
+      }
+      if (data?.status === 'success' && Array.isArray(data.data)) {
+        setRecords(data.data);
       }
     } catch (err) {
       console.error(err);
@@ -583,7 +587,8 @@ const FixedDtrPage = () => {
   const isPmOutDisabled = loading || hasPmOut || !hasAmIn;
 
   // --- ADMIN EXPORT LOGIC ---
-  const handleEmployeePdfExport = () => {
+  const handleEmployeePdfExport = (targetUser = null) => {
+    const exportUser = targetUser || displayUser || user;
     const doc = new jsPDF({ orientation: 'portrait' });
 
     doc.setFontSize(18);
@@ -593,28 +598,18 @@ const FixedDtrPage = () => {
 
     doc.setFontSize(11);
     doc.setTextColor(100, 116, 139);
-    doc.text(`Employee: ${user.full_name}`, 14, 30);
+    doc.text(`Employee: ${exportUser.full_name}`, 14, 30);
 
-    let filterText = "";
-    if (dtrFilterType === 'month') {
-      const [y, m] = dtrFilterValue.split('-');
-      const d = new Date(y, m - 1);
-      filterText = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    } else if (dtrFilterType === 'week') {
-      filterText = `Week of ${dtrFilterValue}`;
-    } else {
-      filterText = dtrFilterValue;
-    }
-    doc.text(`Period: ${filterText}`, 14, 36);
 
-    const tableColumn = ["DATE", "AM IN", "AM OUT", "PM IN", "PM OUT", "HRS", "STATUS"];
+
+    const tableColumn = ["DATE", "AM IN", "AM OUT", "PM IN", "PM OUT", "TOTAL"];
     const tableRows = [];
     let totalHrs = 0;
 
     filteredDays.forEach(dayObj => {
       const dailyRecords = tableRecords.filter(r => r.date === dayObj.dateStr);
       const row = dailyRecords[0];
-      const targetUserId = user.id;
+      const targetUserId = exportUser.id;
 
       const approvedLeaveForDay = leaveRequests.find(lr =>
         String(lr.user_id) === String(targetUserId) &&
@@ -660,17 +655,16 @@ const FixedDtrPage = () => {
         isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '--:--'),
         isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '--:--'),
         isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '--:--'),
-        (displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '')),
-        displayStatus
+        (displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : ''))
       ]);
     });
 
-    tableRows.push(["TOTAL", "", "", "", "", formatHoursDuration(totalHrs), ""]);
+    tableRows.push(["TOTAL", "", "", "", "", formatHoursDuration(totalHrs)]);
 
     autoTable(doc, {
       head: [tableColumn],
       body: tableRows,
-      startY: 42,
+      startY: 36,
       theme: 'grid',
       headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
       bodyStyles: { textColor: [0, 0, 0], halign: 'center' },
@@ -679,8 +673,8 @@ const FixedDtrPage = () => {
       columnStyles: { 0: { halign: 'left' } }
     });
 
-    doc.save(`Attendance_Record_${user.full_name}_${dtrFilterValue}.pdf`);
-    logSystemAction('DOWNLOAD_ATTENDANCE', `User/Admin downloaded Attendance Record PDF for ${user.full_name}.`);
+    doc.save(`Attendance_Record_${exportUser.full_name}_${dtrFilterValue}.pdf`);
+    logSystemAction('DOWNLOAD_ATTENDANCE', `User/Admin downloaded Attendance Record PDF for ${exportUser.full_name}.`);
   };
 
   const exportPDF = (customStart = startDate, customEnd = endDate, exportType = 'custom', usersToExport = customExportUsers, category = 'Timed') => {
@@ -1175,8 +1169,19 @@ const FixedDtrPage = () => {
             </div>
 
             <div className="dtr-table-section" style={{ marginTop: '24px' }}>
-              <div className="dtr-table-title">
+              <div className="dtr-table-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>ATTENDANCE RECORD</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <button
+                    type="button"
+                    className="dtr-download-btn"
+                    onClick={() => handleEmployeePdfExport(displayUser || user)}
+                    title="Download Attendance Record PDF"
+                  >
+                    <Download size={16} />
+                  </button>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ID: {displayUser?.employee_id || displayUser?.id || user.id}</span>
+                </div>
               </div>
               <div className="table-responsive">
                 <table className="dtr-monthly-table">
@@ -1342,7 +1347,17 @@ const FixedDtrPage = () => {
                 <div key={emp.id} className="dtr-table-section" style={{ marginTop: index === 0 ? '0' : '40px' }}>
                   <div className="dtr-table-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span>ATTENDANCE RECORD - <span style={{ color: 'var(--primary)' }}>{emp.full_name}</span></span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ID: {emp.employee_id || emp.id}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <button
+                        type="button"
+                        className="dtr-download-btn"
+                        onClick={() => handleEmployeePdfExport(emp)}
+                        title={`Download Attendance Record PDF for ${emp.full_name}`}
+                      >
+                        <Download size={16} />
+                      </button>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ID: {emp.employee_id || emp.id}</span>
+                    </div>
                   </div>
                   <div className="table-responsive">
                     <table className="dtr-monthly-table">

@@ -24,20 +24,24 @@ export const NotificationProvider = ({ children }) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const addNotification = useCallback(async (notification) => {
+  const addNotification = useCallback(async (notification, secondaryType = 'info') => {
+    const notifObj = typeof notification === 'string'
+      ? { message: notification, type: secondaryType || 'info' }
+      : (notification || {});
+
     const now = Date.now();
-    const msgKey = `${notification.type || 'info'}::${notification.message}`;
+    const msgKey = `${notifObj.type || 'info'}::${notifObj.message}`;
 
     // Prevent adding the exact same toast (same message+type) within the last 3 seconds
     if (
-      lastNotificationRef.current.message === notification.message &&
-      lastNotificationRef.current.type === (notification.type || 'info') &&
+      lastNotificationRef.current.message === notifObj.message &&
+      lastNotificationRef.current.type === (notifObj.type || 'info') &&
       (now - lastNotificationRef.current.time) < 3000
     ) {
       return; 
     }
     
-    lastNotificationRef.current = { message: notification.message, type: notification.type || 'info', time: now };
+    lastNotificationRef.current = { message: notifObj.message, type: notifObj.type || 'info', time: now };
 
     // Mark this message as "pending" so the poller won't re-toast it
     pendingMessages.current.add(msgKey);
@@ -45,13 +49,13 @@ export const NotificationProvider = ({ children }) => {
     const localId = Date.now() + Math.random();
     const newToast = {
       timestamp: new Date(),
-      ...notification,
+      ...notifObj,
       id: localId,
     };
     
     setToasts(prev => {
       // Prevent duplicate toasts on screen at the same time
-      if (prev.some(t => t.message === notification.message && t.type === (notification.type || 'info'))) {
+      if (prev.some(t => t.message === notifObj.message && t.type === (notifObj.type || 'info'))) {
         return prev;
       }
       const updated = [...prev, newToast];

@@ -43,8 +43,12 @@ const EmployeeManagement = () => {
   const fetchEmployees = async () => {
     try {
       const res = await axios.get(`${API_BASE}/employees.php?action=list`);
-      if (res.data.status === 'success') {
-        setEmployees(res.data.data);
+      let data = res.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) {}
+      }
+      if (data?.status === 'success' && Array.isArray(data.data)) {
+        setEmployees(data.data);
       }
     } catch (err) {
       console.error(err);
@@ -191,6 +195,7 @@ const EmployeeManagement = () => {
       data.append('full_name', formData.full_name);
       data.append('hourly_rate', isFixed ? '0' : (formData.hourly_rate || '0'));
       data.append('weekly_rate', isFixed ? (formData.weekly_rate || '0') : '0');
+      data.append('ot_rate', '0');
       data.append('role', formData.role);
       data.append('email', formData.email || '');
       const fullPhone = formData.phone_number ? `${formData.phone_code} ${formData.phone_number}` : '';
@@ -534,7 +539,7 @@ const EmployeeManagement = () => {
                 {[
                   { id: 'profile', label: formData.role === 'admin' ? 'Profile Details' : 'Personal Details' },
                   ...(formData.role === 'admin' ? [] : [
-                    { id: 'rate', label: (formData.employee_type || '').toLowerCase() === 'fixed' ? 'Weekly Rate' : 'Hourly Rate' },
+                    { id: 'rate', label: 'Compensation & Rates' },
                     { id: 'government', label: 'Government ID' }
                   ])
                 ].map(tab => (
@@ -841,7 +846,7 @@ const EmployeeManagement = () => {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="5" className="empty-state">
+                  <td colSpan="7" className="empty-state">
                     No employees found.
                   </td>
                 </tr>
@@ -1011,16 +1016,18 @@ const EmployeeManagement = () => {
                           <p>{(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? 'Fixed' : 'Timed'}</p>
                         </div>
                         {selectedEmployeeForView.role !== 'admin' && (
-                        <div className="info-group">
-                          <label>{(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? 'Weekly Rate' : 'Hourly Rate'}</label>
-                          <p className="highlight-text">
-                            {(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? (
-                              parseFloat(selectedEmployeeForView.weekly_rate) === 0 || !selectedEmployeeForView.weekly_rate ? '-- --' : `$${parseFloat(selectedEmployeeForView.weekly_rate).toFixed(2)}/wk`
-                            ) : (
-                              parseFloat(selectedEmployeeForView.hourly_rate) === 0 || !selectedEmployeeForView.hourly_rate ? '-- --' : `$${parseFloat(selectedEmployeeForView.hourly_rate).toFixed(2)}/hr`
-                            )}
-                          </p>
-                        </div>
+                          <>
+                            <div className="info-group">
+                              <label>{(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? 'Weekly Rate' : 'Hourly Rate'}</label>
+                              <p className="highlight-text">
+                                {(selectedEmployeeForView.employee_type || '').toLowerCase() === 'fixed' ? (
+                                  parseFloat(selectedEmployeeForView.weekly_rate) === 0 || !selectedEmployeeForView.weekly_rate ? '-- --' : `$${parseFloat(selectedEmployeeForView.weekly_rate).toFixed(2)}/wk`
+                                ) : (
+                                  parseFloat(selectedEmployeeForView.hourly_rate) === 0 || !selectedEmployeeForView.hourly_rate ? '-- --' : `$${parseFloat(selectedEmployeeForView.hourly_rate).toFixed(2)}/hr`
+                                )}
+                              </p>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>

@@ -63,7 +63,7 @@ const MultiSelectDropdown = ({ options, selected, onChange, className = "premium
         <ChevronDown size={16} style={{ flexShrink: 0, marginLeft: '8px', opacity: 0.7 }} />
       </div>
       {isOpen && (
-        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--bg-surface, #fff)', border: '1px solid var(--glass-border, #e2e8f0)', borderRadius: '8px', marginTop: '4px', zIndex: 999, maxHeight: '250px', overflowY: 'auto', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}>
+        <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '200px', background: 'var(--bg-surface, #fff)', border: '1px solid var(--glass-border, #e2e8f0)', borderRadius: '8px', marginTop: '4px', zIndex: 999, maxHeight: '250px', overflowY: 'auto', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}>
           <div
             style={{ padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--glass-border, #e2e8f0)' }}
             onClick={() => toggleOption('all')}
@@ -927,19 +927,19 @@ const CalendarPage = () => {
   return (
     <div className="page-container">
       <div className="premium-calendar-header">
-        <div className="header-single-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '15px' }}>
+        <div className="header-single-row">
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-            <h1 className="calendar-main-title" style={{ fontSize: '1.4rem', margin: 0 }}>Calendar</h1>
+          <div className="calendar-header-left">
+            <h1 className="calendar-main-title">Calendar</h1>
 
-            <div className="view-mode-toggle" style={{ display: 'flex', background: 'rgba(0, 0, 0, 0.04)', borderRadius: '8px', padding: '4px' }}>
+            <div className="view-mode-toggle">
               <button className={`view-btn ${viewMode === 'month' ? 'active' : ''}`} onClick={() => setViewMode('month')}>Month</button>
               <button className={`view-btn ${viewMode === 'week' ? 'active' : ''}`} onClick={() => setViewMode('week')}>Week</button>
               <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')}>List</button>
             </div>
           </div>
 
-          <div className="date-navigation" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div className="date-navigation">
             <button onClick={prevPeriod} className="nav-arrow-btn"><ChevronLeft size={16} /></button>
             {viewMode === 'week' ? (
               <CustomWeekPicker
@@ -949,14 +949,14 @@ const CalendarPage = () => {
               />
             ) : (
               <div
-                style={{ position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center', minWidth: '160px', cursor: 'pointer' }}
+                className="calendar-month-picker-wrap"
                 onClick={() => {
                   if (dateInputRef.current && typeof dateInputRef.current.showPicker === 'function') {
                     dateInputRef.current.showPicker();
                   }
                 }}
               >
-                <h2 className="current-date-text" style={{ fontSize: '1.1rem', margin: 0, textAlign: 'center' }}>{getDateDisplay()}</h2>
+                <h2 className="current-date-text">{getDateDisplay()}</h2>
                 <input
                   ref={dateInputRef}
                   type="month"
@@ -979,9 +979,9 @@ const CalendarPage = () => {
             <button onClick={today} className="today-btn">Today</button>
           </div>
 
-          <div className="header-actions" style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          <div className="header-actions">
             {isAdmin && (
-              <div style={{ minWidth: '180px' }}>
+              <div className="calendar-emp-filter">
                 <MultiSelectDropdown
                   options={employees}
                   selected={employeeFilter}
@@ -991,7 +991,7 @@ const CalendarPage = () => {
               </div>
             )}
             <select
-              className="action-btn huddle-btn"
+              className="action-btn huddle-btn calendar-schedule-select"
               value={scheduleFilter}
               onChange={(e) => setScheduleFilter(e.target.value)}
               style={{ backgroundColor: 'var(--card-bg)', outline: 'none', cursor: 'pointer' }}

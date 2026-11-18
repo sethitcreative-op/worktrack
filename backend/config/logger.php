@@ -1,4 +1,4 @@
-<?php
+    <?php
 // backend/config/logger.php
 require_once 'database.php';
 

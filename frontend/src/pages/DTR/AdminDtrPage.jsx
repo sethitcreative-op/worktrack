@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import SummaryDetailModal from './SummaryDetailModal';
 import axios from 'axios';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Download, CheckCircle, Clock, Filter, Settings, Calendar as CalendarIcon, ChevronDown, CalendarDays, Users, ListFilter, Edit, Trash2, Plus, X, RotateCcw } from 'lucide-react';
+import { Download, CheckCircle, Clock, Filter, Settings, Calendar as CalendarIcon, ChevronDown, CalendarDays, Users, ListFilter, Edit, Trash2, Plus, X, RotateCcw, Search } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 import './AdminDtrPage.css';
 import API_BASE from '../../config/api';
@@ -173,13 +174,13 @@ const AdminDtrPage = () => {
     return result;
   };
 
-  // Helper: format decimal hours (e.g. 8.5) to "HH:MM:SS"
+  // Helper: format decimal hours (e.g. 8.5) to "Xhrs Ymins"
   const formatHoursDuration = (decimalHours) => {
     const val = parseFloat(decimalHours);
     if (!val || isNaN(val) || val === 0) return '0hrs 0mins';
-    const totalSeconds = Math.round(val * 3600);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const totalMinutes = Math.round(val * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
 
     return `${hours}hrs ${minutes}mins`;
   };
@@ -192,12 +193,27 @@ const AdminDtrPage = () => {
   const [customExportUsers, setCustomExportUsers] = useState(['all']);
   const [tableFilterUser, setTableFilterUser] = useState('all');
   const [tableFilterType, setTableFilterType] = useState('all');
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [summaryModal, setSummaryModal] = useState({
+    isOpen: false,
+    type: 'present'
+  });
   const [fixedReportCategory, setFixedReportCategory] = useState('Timed');
-  const [fixedReportDateType, setFixedReportDateType] = useState('month');
-  const [fixedReportDateValue, setFixedReportDateValue] = useState(() => new Date().toISOString().slice(0, 7));
+  const [fixedReportDateType, setFixedReportDateType] = useState('week');
+  const [fixedReportDateValue, setFixedReportDateValue] = useState(() => {
+    const today = new Date();
+    const dayOfWeek = today.getDay();
+    const diff = (dayOfWeek + 7 - 4) % 7;
+    const start = new Date(today);
+    start.setDate(today.getDate() - diff);
+    return getLocalDateStr(start);
+  });
   const [fixedReportUsers, setFixedReportUsers] = useState(['all']);
   const [pdfColumns, setPdfColumns] = useState({
     name: true,
+    day: true,
+    logInRecord: true,
     amIn: true,
     amOut: true,
     pmIn: true,
@@ -205,7 +221,6 @@ const AdminDtrPage = () => {
     totalHrs: true,
     rate: true,
     earnings: true,
-    logInRecord: true,
     hours: true,
     status: true,
     daysWorked: true,
@@ -325,6 +340,144 @@ const AdminDtrPage = () => {
     logSystemAction('RESET_GRAND_TOTAL', `Admin reset Grand Total for ${empName} (${periodKey}) to auto-calculated.`);
   };
 
+  // Employee Overtime State
+  const [overtimeRecords, setOvertimeRecords] = useState([]);
+  const [otInputValues, setOtInputValues] = useState({});
+
+  const fetchOvertime = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/dtr.php?action=get_overtime`);
+      let data = res.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) {}
+      }
+      if (data?.status === 'success' && Array.isArray(data.data)) {
+        setOvertimeRecords(data.data || []);
+      }
+    } catch (err) {
+      console.error('Error fetching overtime records:', err);
+    }
+  };
+
+  const weekBelongsToMonth = (weekStartStr, monthStr) => {
+    if (!weekStartStr || !monthStr) return false;
+    const parts = weekStartStr.split('-').map(Number);
+    if (parts.length === 3) {
+      // Thursday + 3 days = Sunday (middle day of the 7-day week Thu-Wed, ensuring each week belongs to exactly 1 month)
+      const mid = new Date(parts[0], parts[1] - 1, parts[2] + 3);
+      const midMonthStr = `${mid.getFullYear()}-${String(mid.getMonth() + 1).padStart(2, '0')}`;
+      return midMonthStr === monthStr;
+    }
+    return weekStartStr.startsWith(monthStr);
+  };
+
+  const dayBelongsToWeek = (dayStr, weekStartStr) => {
+    if (!dayStr || !weekStartStr) return false;
+    const parts = weekStartStr.split('-').map(Number);
+    if (parts.length !== 3) return false;
+    const start = new Date(parts[0], parts[1] - 1, parts[2]);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    const startStr = weekStartStr;
+    const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+    return dayStr >= startStr && dayStr <= endStr;
+  };
+
+  const getEmployeeDailyOvertimeForWeek = (userId, weekStartStr) => {
+    if (!userId || !weekStartStr) return 0;
+    const matchingDays = overtimeRecords.filter(r => 
+      String(r.user_id) === String(userId) && 
+      r.period_type === 'day' && 
+      dayBelongsToWeek(r.period_value, weekStartStr)
+    );
+    return matchingDays.reduce((sum, r) => sum + (parseFloat(r.ot_amount) || 0), 0);
+  };
+
+  const getDirectOvertime = (userId, filterType = dtrFilterType, filterVal = dtrFilterValue) => {
+    if (!userId || !filterVal) return 0;
+    const rec = overtimeRecords.find(r => 
+      String(r.user_id) === String(userId) && 
+      r.period_type === filterType && 
+      r.period_value === filterVal
+    );
+    return rec ? parseFloat(rec.ot_amount || 0) : 0;
+  };
+
+  const getEmployeeOvertime = (userId, filterType = dtrFilterType, filterVal = dtrFilterValue) => {
+    if (!userId || !filterVal) return 0;
+    
+    if (filterType === 'day') {
+      const rec = overtimeRecords.find(r => String(r.user_id) === String(userId) && r.period_type === 'day' && r.period_value === filterVal);
+      return rec ? parseFloat(rec.ot_amount || 0) : 0;
+    }
+    
+    if (filterType === 'week') {
+      const rec = overtimeRecords.find(r => String(r.user_id) === String(userId) && r.period_type === 'week' && r.period_value === filterVal);
+      const weeklyDirect = rec ? parseFloat(rec.ot_amount || 0) : 0;
+      const dailySum = getEmployeeDailyOvertimeForWeek(userId, filterVal);
+      return weeklyDirect + dailySum;
+    }
+    
+    if (filterType === 'month') {
+      const monthPrefix = filterVal ? filterVal.slice(0, 7) : '';
+      // Sum all weekly OT for weeks that fall in this month
+      const matchingWeeks = overtimeRecords.filter(r => 
+        String(r.user_id) === String(userId) && 
+        r.period_type === 'week' && 
+        weekBelongsToMonth(r.period_value, monthPrefix)
+      );
+      const totalWeeklyOT = matchingWeeks.reduce((sum, r) => sum + (parseFloat(r.ot_amount) || 0), 0);
+      
+      const matchingDays = overtimeRecords.filter(r => 
+        String(r.user_id) === String(userId) && 
+        r.period_type === 'day' && 
+        r.period_value.startsWith(monthPrefix)
+      );
+      const totalDayOT = matchingDays.reduce((sum, r) => sum + (parseFloat(r.ot_amount) || 0), 0);
+      
+      return totalWeeklyOT + totalDayOT;
+    }
+
+    if (filterType === 'year' || filterType === 'yearly') {
+      const yearPrefix = filterVal ? filterVal.slice(0, 4) : '';
+      const matching = overtimeRecords.filter(r => 
+        String(r.user_id) === String(userId) && 
+        r.period_value.startsWith(yearPrefix)
+      );
+      return matching.reduce((sum, r) => sum + (parseFloat(r.ot_amount) || 0), 0);
+    }
+    
+    const rec = overtimeRecords.find(r => String(r.user_id) === String(userId) && r.period_value === filterVal);
+    return rec ? parseFloat(rec.ot_amount || 0) : 0;
+  };
+
+  const handleSaveOvertime = async (userId, periodType, periodVal, amountStr) => {
+    const amt = parseFloat(amountStr) || 0;
+    if (amt < 0) return;
+    
+    try {
+      const res = await axios.post(`${API_BASE}/dtr.php`, {
+        action: 'save_overtime',
+        user_id: userId,
+        period_type: periodType,
+        period_value: periodVal,
+        ot_amount: amt,
+        modifier_id: user?.id || 1
+      });
+      
+      if (res.data.status === 'success') {
+        setOvertimeRecords(prev => {
+          const filtered = prev.filter(r => !(String(r.user_id) === String(userId) && r.period_type === periodType && r.period_value === periodVal));
+          return [...filtered, { user_id: userId, period_type: periodType, period_value: periodVal, ot_amount: amt }];
+        });
+        addNotification({ type: 'success', message: `Overtime updated ($${amt.toFixed(2)})` });
+      }
+    } catch (err) {
+      console.error('Failed to save overtime:', err);
+      addNotification({ type: 'error', message: 'Failed to save overtime' });
+    }
+  };
+
   const handleFilterTypeChange = (e) => {
     const type = e.target.value;
     setDtrFilterType(type);
@@ -361,6 +514,7 @@ const AdminDtrPage = () => {
     fetchRecords();
     fetchEvents();
     fetchLeaveRequests();
+    fetchOvertime();
     if (isAdmin) fetchEmployees();
   }, []);
 
@@ -377,7 +531,7 @@ const AdminDtrPage = () => {
 
   const fetchLeaveRequests = async () => {
     try {
-      // Fetch approved leave requests — admin sees all, user sees their own
+      // Fetch approved leave requests  -  admin sees all, user sees their own
       const url = isAdmin
         ? `${API_BASE}/leaves.php?action=requests&role=admin`
         : `${API_BASE}/leaves.php?action=requests&role=user&user_id=${user.id}`;
@@ -395,12 +549,16 @@ const AdminDtrPage = () => {
   const fetchEmployees = async () => {
     try {
       const res = await axios.get(`${API_BASE}/employees.php?action=list`);
-      if (res.data.status === 'success') {
-        const nonAdmins = res.data.data.filter(u => u.role !== 'admin');
+      let data = res.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) {}
+      }
+      if (data?.status === 'success' && Array.isArray(data.data)) {
+        const nonAdmins = data.data.filter(u => u.role !== 'admin');
         setEmployees(nonAdmins);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching employees:', err);
     }
   };
 
@@ -410,11 +568,15 @@ const AdminDtrPage = () => {
         ? `${API_BASE}/dtr.php?action=get_records`
         : `${API_BASE}/dtr.php?action=get_records&user_id=${user.id}`;
       const res = await axios.get(url);
-      if (res.data.status === 'success') {
-        setRecords(res.data.data);
+      let data = res.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) {}
+      }
+      if (data?.status === 'success' && Array.isArray(data.data)) {
+        setRecords(data.data);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching DTR records:', err);
     }
   };
 
@@ -456,8 +618,8 @@ const AdminDtrPage = () => {
         deductionHours = Math.max(0.5, lunchHours);
       }
     } else {
-      if (grossHours > 6) {
-        deductionHours = 1.0;
+      if (grossHours > 5) {
+        deductionHours = 0.5;
       }
     }
     return Math.round(Math.max(0, grossHours - deductionHours) * 100) / 100;
@@ -687,23 +849,189 @@ const AdminDtrPage = () => {
     return days;
   }, [dtrFilterType, dtrFilterValue]);
 
-  // Filter records for the main table view
-  const tableRecords = records.filter(r => {
-    if (tableFilterUser !== 'all' && String(r.user_id) !== String(tableFilterUser)) return false;
-    if (tableFilterType !== 'all') {
-      const emp = employees.find(e => String(e.id) === String(r.user_id));
-      const empType = emp?.employee_type || 'Timed';
-      if (empType !== tableFilterType) return false;
-    }
-    return true;
-  });
+  // Directory of employees filtered by active category type and search query
+  const directoryEmployees = useMemo(() => {
+    return employees.filter(emp => {
+      if (emp.is_active !== undefined && parseInt(emp.is_active) === 0) return false;
+      if (tableFilterType !== 'all' && (emp.employee_type || 'Timed') !== tableFilterType) return false;
+      if (employeeSearch.trim()) {
+        const q = employeeSearch.toLowerCase();
+        const nameMatch = (emp.full_name || '').toLowerCase().includes(q);
+        const idMatch = String(emp.employee_id || emp.id || '').toLowerCase().includes(q);
+        const deptMatch = (emp.department || '').toLowerCase().includes(q);
+        if (!nameMatch && !idMatch && !deptMatch) return false;
+      }
+      return true;
+    });
+  }, [employees, tableFilterType, employeeSearch]);
 
-  let displayUser = user;
-  if (isAdmin && tableFilterUser !== 'all') {
-    displayUser = employees.find(e => String(e.id) === String(tableFilterUser)) || user;
-  } else if (isAdmin && tableFilterUser === 'all') {
-    displayUser = null;
-  }
+  // Selected active employee for the timesheet workspace (null = All Employees)
+  const activeEmployee = useMemo(() => {
+    if (!isAdmin) return user;
+    if (selectedEmployeeId && selectedEmployeeId !== 'all') {
+      const found = employees.find(e => String(e.id) === String(selectedEmployeeId));
+      if (found) return found;
+    }
+    if (tableFilterUser && tableFilterUser !== 'all') {
+      const found = employees.find(e => String(e.id) === String(tableFilterUser));
+      if (found) return found;
+    }
+    return null;
+  }, [isAdmin, user, selectedEmployeeId, tableFilterUser, employees]);
+
+  const displayUser = activeEmployee;
+
+  const displayedEmployees = useMemo(() => {
+    if (displayUser) return [displayUser];
+    return directoryEmployees;
+  }, [displayUser, directoryEmployees]);
+
+  // Period Summary metrics for the active scope (All Employees or selected employee)
+  const periodSummary = useMemo(() => {
+    let totalHours = 0;
+    let totalOvertime = 0;
+    let totalPayroll = 0;
+    let timedCount = 0;
+    let fixedCount = 0;
+    let employeesWithLogs = 0;
+    let totalDaysWorked = 0;
+
+    displayedEmployees.forEach(emp => {
+      const isFixedEmp = emp.employee_type === 'Fixed';
+      if (isFixedEmp) fixedCount += 1;
+      else timedCount += 1;
+
+      const empRecords = records.filter(r => String(r.user_id) === String(emp.id));
+      let empHrs = 0;
+      let empDaysWorked = 0;
+
+      filteredDays.forEach(d => {
+        const row = empRecords.find(r => r.date === d.dateStr);
+        if (row && row.status !== 'Absent') {
+          const h = parseFloat(row.total_hours) || 0;
+          empHrs += h;
+          if ((row.am_in && !row.am_in.includes('1900-01-01')) || row.status === 'Present' || h > 0) {
+            empDaysWorked += 1;
+          }
+        }
+      });
+
+      const overrideHrs = getGrandTotalOverride(emp.id);
+      const finalHrs = overrideHrs !== undefined ? overrideHrs : empHrs;
+      const empOt = getEmployeeOvertime(emp.id, dtrFilterType, dtrFilterValue);
+
+      let empBasePay = 0;
+      if (isFixedEmp) {
+        const weeklyRate = parseFloat(emp.weekly_rate) || 0;
+        const absents = dtrFilterType === 'week' && empDaysWorked < 5 ? 5 - empDaysWorked : 0;
+        const deduction = (weeklyRate / 5) * absents;
+        empBasePay = dtrFilterType === 'day'
+          ? (empDaysWorked > 0 ? weeklyRate / 5 : 0)
+          : Math.max(0, weeklyRate - deduction);
+      } else {
+        const hourlyRate = parseFloat(emp.hourly_rate) || 0;
+        empBasePay = finalHrs * hourlyRate;
+      }
+
+      totalHours += finalHrs;
+      totalOvertime += empOt;
+      totalPayroll += empBasePay + empOt;
+      totalDaysWorked += empDaysWorked;
+      if (empDaysWorked > 0 || finalHrs > 0) {
+        employeesWithLogs += 1;
+      }
+    });
+
+    let periodLabel = dtrFilterValue || '';
+    if (filteredDays.length === 1) {
+      periodLabel = filteredDays[0].dateStr;
+    } else if (filteredDays.length > 1) {
+      const startDateLabel = filteredDays[0].dateStr;
+      const endDateLabel = filteredDays[filteredDays.length - 1].dateStr;
+      periodLabel = dtrFilterType === 'month' && dtrFilterValue
+        ? new Date(`${dtrFilterValue}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+        : `${startDateLabel} – ${endDateLabel}`;
+    }
+
+    return {
+      totalHours,
+      totalOvertime,
+      totalPayroll,
+      timedCount,
+      fixedCount,
+      employeesWithLogs,
+      totalDaysWorked,
+      periodLabel
+    };
+  }, [displayedEmployees, records, filteredDays, dtrFilterType, dtrFilterValue, editedGrandTotals, overtimeRecords]);
+
+  // Filter records for the active employee (or all records when viewing All Employees)
+  const tableRecords = useMemo(() => {
+    if (!displayUser) return records;
+    return records.filter(r => String(r.user_id) === String(displayUser.id));
+  }, [records, displayUser]);
+
+  const getEmployeePeriodSummary = (empId, empType) => {
+    const empRecords = records.filter(r => String(r.user_id) === String(empId));
+    let totalHrs = 0;
+    let daysWorked = 0;
+
+    filteredDays.forEach(d => {
+      const row = empRecords.find(r => r.date === d.dateStr);
+      if (row && row.status !== 'Absent') {
+        const h = parseFloat(row.total_hours) || 0;
+        totalHrs += h;
+        if ((row.am_in && !row.am_in.includes('1900-01-01')) || row.status === 'Present' || h > 0) {
+          daysWorked += 1;
+        }
+      }
+    });
+
+    const overrideHrs = getGrandTotalOverride(empId);
+    const finalHrs = overrideHrs !== undefined ? overrideHrs : totalHrs;
+
+    return {
+      totalHrs: finalHrs,
+      daysWorked,
+      isFixed: empType === 'Fixed'
+    };
+  };
+
+  const getInitials = (name) => {
+    if (!name) return '??';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  };
+
+  const renderStatusBadge = (status, isSpecial) => {
+    const s = (status || '').toUpperCase();
+    if (s === 'PRESENT') {
+      return <span className="dtr-badge-pill dtr-badge-pill--present">Present</span>;
+    }
+    if (s === 'ABSENT') {
+      return <span className="dtr-badge-pill dtr-badge-pill--absent">Absent</span>;
+    }
+    if (s === 'LEAVE' || s === 'APPROVED LEAVE') {
+      return <span className="dtr-badge-pill dtr-badge-pill--leave">Leave</span>;
+    }
+    if (s === 'HOLIDAY') {
+      return <span className="dtr-badge-pill dtr-badge-pill--holiday">Holiday</span>;
+    }
+    if (s === 'RESCHEDULED' || s === 'PENDING RESCHEDULE') {
+      return <span className="dtr-badge-pill dtr-badge-pill--warning">Rescheduled</span>;
+    }
+    if (s === 'MISSING TIMEOUT') {
+      return <span className="dtr-badge-pill dtr-badge-pill--danger">Missing Timeout</span>;
+    }
+    if (s === 'SCHEDULED' || s === 'PENDING SCHEDULE') {
+      return <span className="dtr-badge-pill dtr-badge-pill--scheduled">Scheduled</span>;
+    }
+    if (!status || status === '----' || status === '---') {
+      return <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>—</span>;
+    }
+    return <span className="dtr-badge-pill dtr-badge-pill--neutral">{status}</span>;
+  };
 
   // Calculate All Employees Summary (if displayUser is null)
   const allEmployeesSummary = React.useMemo(() => {
@@ -752,6 +1080,196 @@ const AdminDtrPage = () => {
     isValidTS(r.am_in) && !isValidTS(r.pm_out) && r.date === todayDateStr
   );
   const displayTodayRecord = tableRecords.find(r => r.date === todayDateStr);
+
+  // Summary Metrics & Detailed Lists for Summary Cards (fully connected to date filter)
+  const summaryData = useMemo(() => {
+    let totalScheduled = 0;
+    let totalPresent = 0;
+    let totalLeave = 0;
+    let totalAbsent = 0;
+
+    const presentList = [];
+    const absentList = [];
+    const scheduledList = [];
+    const leaveList = [];
+
+    // Respect active filters for employee type and exclude deactivated employees
+    const activeEmployees = employees.filter(emp => {
+      if (emp.is_active !== undefined && parseInt(emp.is_active) === 0) return false;
+      if (tableFilterType !== 'all' && (emp.employee_type || 'Timed') !== tableFilterType) return false;
+      return true;
+    });
+
+    filteredDays.forEach(d => {
+      const dayStr = d.dateStr;
+      const isPast = dayStr < todayDateStr;
+
+      activeEmployees.forEach(emp => {
+        // Find record if exists for this date and employee
+        const row = records.find(r => r.date === dayStr && String(r.user_id) === String(emp.id));
+
+        // Check for approved leave
+        const matchingLeaveRequest = leaveRequests.find(lr =>
+          String(lr.user_id) === String(emp.id) &&
+          dayStr >= lr.start_date &&
+          dayStr <= lr.end_date &&
+          (lr.status === 'approved' || lr.status === 'Approved')
+        );
+        const isOnLeave = Boolean(matchingLeaveRequest) || (row && (row.status === 'Leave' || row.status === 'Approved Leave'));
+
+        // Check for holiday
+        const matchingHoliday = events.find(e =>
+          e.event_date === dayStr &&
+          (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
+          e.status === 'approved' &&
+          (e.event_type === 'Holiday' || e.event_type === 'HL')
+        );
+        const isHoliday = Boolean(matchingHoliday) || (row && row.status === 'Holiday');
+
+        // Check if scheduled event in calendar
+        const matchingScheduledEvent = events.find(e =>
+          e.event_date === dayStr &&
+          (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
+          e.status === 'approved' &&
+          (e.event_type === 'WS' || e.title === 'Work Shift' || (e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'VL'))
+        );
+        const isScheduledEvent = Boolean(matchingScheduledEvent);
+
+        // Check if clocked in or marked present
+        const isPresent = !isHoliday && (row && (
+          (row.am_in && !row.am_in.includes('1900-01-01')) ||
+          (row.pm_in && !row.pm_in.includes('1900-01-01')) ||
+          row.status === 'Present' ||
+          row.status === 'Late' ||
+          row.status === 'Missing Timeout' ||
+          (parseFloat(row.total_hours) > 0)
+        ));
+
+        // Explicit absent in record
+        const isExplicitAbsent = !isPresent && (row && row.status === 'Absent');
+
+        // Scheduled shift in the past missed (not present, not on leave, not a holiday)
+        const isMissedScheduledShift = !isPresent && !isOnLeave && !isHoliday && isScheduledEvent && isPast;
+
+        const isAbsent = isExplicitAbsent || isMissedScheduledShift;
+
+        // Total scheduled days includes all actual shifts worked, explicit absences, approved leaves, and approved scheduled shifts
+        const isScheduled = isScheduledEvent || isPresent || isExplicitAbsent || (isOnLeave && !isHoliday);
+
+        if (isPresent) {
+          totalPresent++;
+          presentList.push({
+            id: `${emp.id}_${dayStr}_present`,
+            employee: emp,
+            userId: emp.id,
+            employeeName: emp.full_name || 'N/A',
+            employeeId: emp.employee_id || emp.id,
+            employeeType: emp.employee_type || 'Timed',
+            department: emp.department || 'General',
+            position: emp.position || emp.role || 'N/A',
+            date: dayStr,
+            dayName: d.dayName,
+            row: row,
+            amIn: row?.am_in,
+            amOut: row?.am_out,
+            pmIn: row?.pm_in,
+            pmOut: row?.pm_out,
+            totalHours: row ? parseFloat(row.total_hours) || 0 : 0,
+            status: row?.status || 'Present'
+          });
+        } else if (isOnLeave) {
+          totalLeave++;
+          leaveList.push({
+            id: `${emp.id}_${dayStr}_leave`,
+            employee: emp,
+            userId: emp.id,
+            employeeName: emp.full_name || 'N/A',
+            employeeId: emp.employee_id || emp.id,
+            employeeType: emp.employee_type || 'Timed',
+            department: emp.department || 'General',
+            position: emp.position || emp.role || 'N/A',
+            date: dayStr,
+            dayName: d.dayName,
+            leaveType: matchingLeaveRequest?.leave_type || row?.status || 'Leave',
+            startDate: matchingLeaveRequest?.start_date || dayStr,
+            endDate: matchingLeaveRequest?.end_date || dayStr,
+            reason: matchingLeaveRequest?.reason || 'Approved Leave',
+            status: 'Approved Leave',
+            row: row
+          });
+        } else if (isAbsent) {
+          totalAbsent++;
+          absentList.push({
+            id: `${emp.id}_${dayStr}_absent`,
+            employee: emp,
+            userId: emp.id,
+            employeeName: emp.full_name || 'N/A',
+            employeeId: emp.employee_id || emp.id,
+            employeeType: emp.employee_type || 'Timed',
+            department: emp.department || 'General',
+            position: emp.position || emp.role || 'N/A',
+            date: dayStr,
+            dayName: d.dayName,
+            reason: isExplicitAbsent ? 'Marked Absent in Record' : 'Missed Scheduled Shift',
+            status: 'Absent',
+            row: row
+          });
+        }
+
+        if (isScheduled) {
+          totalScheduled++;
+          let schedDetails = 'Scheduled Workday';
+          if (matchingScheduledEvent) {
+            schedDetails = matchingScheduledEvent.title || 'Work Shift';
+          } else if (isPresent) {
+            schedDetails = 'Worked Shift';
+          } else if (isOnLeave) {
+            schedDetails = 'Scheduled (On Leave)';
+          } else if (isAbsent) {
+            schedDetails = 'Scheduled (Absent)';
+          }
+
+          let attendanceStatus = 'Scheduled';
+          if (isPresent) attendanceStatus = 'Present';
+          else if (isOnLeave) attendanceStatus = 'On Leave';
+          else if (isAbsent) attendanceStatus = 'Absent';
+
+          scheduledList.push({
+            id: `${emp.id}_${dayStr}_scheduled`,
+            employee: emp,
+            userId: emp.id,
+            employeeName: emp.full_name || 'N/A',
+            employeeId: emp.employee_id || emp.id,
+            employeeType: emp.employee_type || 'Timed',
+            department: emp.department || 'General',
+            position: emp.position || emp.role || 'N/A',
+            date: dayStr,
+            dayName: d.dayName,
+            event: matchingScheduledEvent,
+            eventTitle: matchingScheduledEvent?.title || 'Work Shift',
+            eventTime: (matchingScheduledEvent?.start_time && matchingScheduledEvent?.end_time) 
+              ? `${formatTime(matchingScheduledEvent.start_time, dayStr)} - ${formatTime(matchingScheduledEvent.end_time, dayStr)}`
+              : 'Standard Shift',
+            details: schedDetails,
+            attendanceStatus: attendanceStatus,
+            status: 'Scheduled',
+            row: row
+          });
+        }
+      });
+    });
+
+    return {
+      totalScheduled,
+      totalPresent,
+      totalLeave,
+      totalAbsent,
+      presentList,
+      absentList,
+      scheduledList,
+      leaveList
+    };
+  }, [filteredDays, employees, records, events, leaveRequests, tableFilterType, todayDateStr]);
 
   const currentHour = new Date().getHours();
   const isAM = currentHour < 12;
@@ -854,8 +1372,10 @@ const AdminDtrPage = () => {
         // Ensure rate is a valid number from the employees list
         hourly_rate: parseFloat(emp.hourly_rate || 0),
         weekly_rate: parseFloat(emp.weekly_rate || 0),
+        ot_rate: parseFloat(emp.ot_rate || 0),
         employee_type: emp.employee_type || 'Timed',
         total_hours: 0,
+        ot_hours: 0,
         days_worked: 0,
       };
     });
@@ -863,8 +1383,14 @@ const AdminDtrPage = () => {
     currentRecords.forEach(r => {
       const uid = r.user_id;
       if (grouped[uid] && r.status !== 'Absent') {
-        grouped[uid].total_hours += parseFloat(r.total_hours || 0);
+        const h = parseFloat(r.total_hours || 0);
+        grouped[uid].total_hours += h;
         grouped[uid].days_worked += 1;
+        const isFixed = grouped[uid].employee_type === 'Fixed';
+        const otThreshold = isFixed ? 10 : 8;
+        if (h > otThreshold) {
+          grouped[uid].ot_hours += (h - otThreshold);
+        }
       }
     });
 
@@ -878,10 +1404,16 @@ const AdminDtrPage = () => {
       const days = parseInt(record.days_worked || 0);
       const isFixed = record.employee_type === 'Fixed';
       const rate = isFixed ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
+      const otRate = parseFloat(record.ot_rate || 0);
+      const otHours = parseFloat(record.ot_hours || 0);
       
       let deduction = 0;
       let earnings = 0;
       let workedStr = "";
+
+      const otType = exportType === 'monthly' ? 'month' : (exportType === 'yearly' ? 'year' : 'week');
+      const otVal = exportType === 'monthly' ? (startStr ? startStr.slice(0, 7) : exportMonth) : (exportType === 'yearly' ? (startStr ? startStr.slice(0, 4) : '') : startStr);
+      const empManualOt = getEmployeeOvertime(record.user_id, otType, otVal);
 
       if (isFixed) {
         workedStr = `${days} days`;
@@ -890,18 +1422,22 @@ const AdminDtrPage = () => {
           const absents = 5 - days;
           deduction = (rate / 5) * absents;
         }
-        earnings = rate - deduction;
-        if (earnings < 0) earnings = 0;
+        const otPay = otHours * otRate;
+        earnings = Math.max(0, rate - deduction) + otPay + empManualOt;
       } else {
         workedStr = formatHoursDuration(hrs);
-        earnings = hrs * rate;
+        const regHours = Math.max(0, hrs - otHours);
+        const effectiveOtRate = otRate > 0 ? otRate : rate;
+        earnings = (regHours * rate) + (otHours * effectiveOtRate) + empManualOt;
       }
 
       grandTotalEarnings += earnings;
       
+      const fixedRateWithOt = rate + empManualOt;
+
       return [
         record.full_name,
-        isFixed ? (rate > 0 ? `$${rate.toFixed(2)}` : '---') : formatHoursDuration(hrs)
+        isFixed ? (fixedRateWithOt > 0 ? `$${fixedRateWithOt.toFixed(2)}` : '---') : formatHoursDuration(hrs)
       ];
     });
 
@@ -956,11 +1492,16 @@ const AdminDtrPage = () => {
 
     const formatMMDDYYYY = (dateStr) => {
       if (!dateStr) return 'All Time';
-      const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
-      return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}-${d.getFullYear()}`;
+      const parts = dateStr.split('T')[0].split('-');
+      if (parts.length === 3) {
+        return `${parts[1]}-${parts[2]}-${parts[0]}`;
+      }
+      return dateStr;
     };
 
-    let periodStr = `${formatMMDDYYYY(startStr)} to ${formatMMDDYYYY(endStr)}`;
+    let periodStr = startStr === endStr
+      ? formatMMDDYYYY(startStr)
+      : `${formatMMDDYYYY(startStr)} to ${formatMMDDYYYY(endStr)}`;
 
     doc.text(`Period: ${periodStr}`, 148.5, 28, { align: "center" });
 
@@ -972,8 +1513,6 @@ const AdminDtrPage = () => {
     if (startStr) currentRecords = currentRecords.filter(r => r.date >= startStr);
     if (endStr) currentRecords = currentRecords.filter(r => r.date <= endStr);
 
-    // Group by employee
-    const grouped = {};
     let emps = employees;
     if (!usersToExport.includes('all')) {
       emps = employees.filter(e => usersToExport.includes(String(e.id)));
@@ -985,110 +1524,249 @@ const AdminDtrPage = () => {
       return empType === category;
     });
 
-    emps.forEach(emp => {
-      grouped[emp.id] = {
-        user_id: emp.id,
-        full_name: emp.full_name,
-        hourly_rate: parseFloat(emp.hourly_rate || 0),
-        weekly_rate: parseFloat(emp.weekly_rate || 0),
-        employee_type: emp.employee_type || 'Timed',
-        total_hours: 0,
-        days_worked: 0,
-      };
-    });
-
-    currentRecords.forEach(r => {
-      const uid = r.user_id;
-      if (grouped[uid] && r.status !== 'Absent') {
-        grouped[uid].total_hours += parseFloat(r.total_hours || 0);
-        grouped[uid].days_worked += 1;
-      }
-    });
-
-    const isFixed = category === 'Fixed';
-    let tableColumn = [];
-    if (isFixed) {
-      if (pdfColumns.name !== false) tableColumn.push("NAME");
-      if (pdfColumns.totalRate !== false) tableColumn.push("TOTAL RATE");
-      if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
-    } else {
-      if (pdfColumns.name !== false) tableColumn.push("NAME");
-      tableColumn.push("CATEGORY");
-      if (pdfColumns.totalHrs !== false) tableColumn.push("WORKED");
-      if (pdfColumns.rate !== false) tableColumn.push("RATE");
-      tableColumn.push("DEDUCTION");
-      if (pdfColumns.earnings !== false) tableColumn.push("TOTAL PAY");
+    if (emps.length === 0) {
+      alert(`No ${category} employees found to export.`);
+      return;
     }
 
-    let grandTotalHrs = 0;
-    let grandTotalEarnings = 0;
+    const isFixed = category === 'Fixed';
+
+    const getDaysList = (start, end) => {
+      const days = [];
+      if (!start || !end) return days;
+      const [sY, sM, sD] = start.split('-').map(Number);
+      const [eY, eM, eD] = end.split('-').map(Number);
+      const curr = new Date(sY, sM - 1, sD);
+      const endD = new Date(eY, eM - 1, eD);
+      while (curr <= endD) {
+        const y = curr.getFullYear();
+        const m = String(curr.getMonth() + 1).padStart(2, '0');
+        const dt = String(curr.getDate()).padStart(2, '0');
+        const dateStr = `${y}-${m}-${dt}`;
+        const dayName = curr.toLocaleDateString('en-US', { weekday: 'long' });
+        days.push({ dateStr, dayName, dayNum: curr.getDate() });
+        curr.setDate(curr.getDate() + 1);
+      }
+      return days;
+    };
+
+    const daysList = getDaysList(startStr, endStr);
+
     let currentY = 40;
 
-    Object.values(grouped).forEach((record, index) => {
-      const overrideHrs = getGrandTotalOverride(record.user_id);
-      const hrs = overrideHrs !== undefined ? overrideHrs : parseFloat(record.total_hours || 0);
-      const days = parseInt(record.days_worked || 0);
-      const isFixedUser = record.employee_type === 'Fixed';
-      const rate = isFixedUser ? parseFloat(record.weekly_rate || 0) : parseFloat(record.hourly_rate || 0);
-      
-      let deduction = 0;
-      let earnings = 0;
-      
-      if (isFixedUser) {
-        if (days < 5) {
-          const absents = 5 - days;
-          deduction = (rate / 5) * absents;
-        }
-        earnings = rate - deduction;
-        if (earnings < 0) earnings = 0;
-      } else {
-        earnings = hrs * rate;
-      }
+    emps.forEach((emp, index) => {
+      const empRecords = currentRecords.filter(r => String(r.user_id) === String(emp.id));
+      const hourlyRate = parseFloat(emp.hourly_rate || 0);
+      const weeklyRate = parseFloat(emp.weekly_rate || 0);
+      const dailyRate = weeklyRate / 5;
 
-      grandTotalHrs += hrs;
-      grandTotalEarnings += earnings;
-
-      let row = [];
+      let tableColumn = [];
       if (isFixed) {
-        if (pdfColumns.name !== false) row.push(record.full_name);
-        if (pdfColumns.totalRate !== false) row.push(rate > 0 ? `$${rate.toFixed(2)}` : '---');
-        if (pdfColumns.daysWorked !== false) row.push(String(days));
+        if (pdfColumns.name !== false) tableColumn.push("NAME");
+        if (pdfColumns.day !== false) tableColumn.push("DAY");
+        if (pdfColumns.logInRecord !== false) tableColumn.push("LOG IN RECORD");
+        tableColumn.push("STATUS");
+        if (pdfColumns.daysWorked !== false) tableColumn.push("DAYS WORKED");
+        if (pdfColumns.totalRate !== false) tableColumn.push("TOTAL RATE");
       } else {
-        row = [
-          record.full_name,
-          isFixedUser ? 'Fixed' : 'Timed',
-          formatHoursDuration(hrs),
-          rate > 0 ? `$${rate.toFixed(2)}/hr` : '---',
-          '---', // Deduction is always --- for Timed
-          earnings > 0 ? `$${earnings.toFixed(2)}` : '-- -- --'
-        ];
+        if (pdfColumns.name !== false) tableColumn.push("NAME");
+        if (pdfColumns.day !== false) tableColumn.push("DAY");
+        if (pdfColumns.amIn !== false) tableColumn.push("AM IN");
+        if (pdfColumns.amOut !== false) tableColumn.push("AM OUT");
+        if (pdfColumns.pmIn !== false) tableColumn.push("PM IN");
+        if (pdfColumns.pmOut !== false) tableColumn.push("PM OUT");
+        if (pdfColumns.totalHrs !== false) tableColumn.push("WORKED");
+        if (pdfColumns.rate !== false) tableColumn.push("RATE");
+        if (pdfColumns.earnings !== false) tableColumn.push("TOTAL PAY");
       }
 
-      // Check if we need a new page
-      if (currentY > 170) {
+      const tableRows = [];
+      let empTotalHrs = 0;
+      let empDaysWorked = 0;
+
+      daysList.forEach(dayObj => {
+        const row = empRecords.find(r => r.date === dayObj.dateStr);
+        const dayText = `${dayObj.dayName}, ${formatMMDDYYYY(dayObj.dateStr)}`;
+
+        const approvedLeaveForDay = leaveRequests.find(lr =>
+          String(lr.user_id) === String(emp.id) &&
+          dayObj.dateStr >= lr.start_date &&
+          dayObj.dateStr <= lr.end_date &&
+          (lr.status === 'approved' || lr.status === 'Approved')
+        );
+
+        const isHoliday = events.some(e =>
+          e.event_date === dayObj.dateStr &&
+          (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
+          e.status === 'approved' &&
+          (e.event_type === 'Holiday' || e.event_type === 'HL')
+        );
+
+        let virtualStatus = '';
+        if (!row) {
+          if (approvedLeaveForDay) {
+            virtualStatus = 'LEAVE';
+          } else if (isHoliday) {
+            virtualStatus = 'HOLIDAY';
+          } else {
+            const isPast = dayObj.dateStr < todayDateStr;
+            if (isPast) {
+              const isScheduled = events.some(e =>
+                e.event_date === dayObj.dateStr &&
+                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
+                e.status === 'approved' &&
+                (e.event_type === 'WS' || e.title === 'Work Shift')
+              );
+              virtualStatus = isScheduled ? 'ABSENT' : '---';
+            } else {
+              virtualStatus = '---';
+            }
+          }
+        }
+
+        const isSpecialStatus = (row && ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(row.status)) || (!row && (virtualStatus === 'LEAVE' || virtualStatus === 'HOLIDAY'));
+        const displayStatus = row && row.status ? row.status.toUpperCase() : virtualStatus;
+
+        if (isFixed) {
+          let fixedTimeLog = '---';
+          let isWorked = false;
+
+          if (isSpecialStatus) {
+            fixedTimeLog = displayStatus || '---';
+          } else if (row && row.am_in && row.status !== 'Absent') {
+            fixedTimeLog = formatTime(row.am_in, row.date);
+            isWorked = true;
+          } else if (row && row.status === 'Present') {
+            fixedTimeLog = 'Present';
+            isWorked = true;
+          } else {
+            fixedTimeLog = displayStatus === 'ABSENT' ? 'ABSENT' : '---';
+          }
+
+          if (isWorked) {
+            empDaysWorked += 1;
+          }
+
+          const dailyRow = [];
+          if (pdfColumns.name !== false) dailyRow.push(emp.full_name);
+          if (pdfColumns.day !== false) dailyRow.push(dayText);
+          if (pdfColumns.logInRecord !== false) dailyRow.push(fixedTimeLog);
+          dailyRow.push(isSpecialStatus ? displayStatus : (isWorked ? 'PRESENT' : (displayStatus || '---')));
+          if (pdfColumns.daysWorked !== false) dailyRow.push(isWorked ? '1' : '0');
+          if (pdfColumns.totalRate !== false) dailyRow.push(isWorked && dailyRate > 0 ? `$${dailyRate.toFixed(2)}` : '---');
+          tableRows.push(dailyRow);
+        } else {
+          // Timed employee
+          const hrs = (row && row.status !== 'Absent') ? (parseFloat(row.total_hours) || 0) : 0;
+          const pay = hrs * hourlyRate;
+
+          if (row && row.status !== 'Absent') {
+            empTotalHrs += hrs;
+          }
+
+          const amInVal = isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '--:--');
+          const amOutVal = isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '--:--');
+          const pmInVal = isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '--:--');
+          const pmOutVal = isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '--:--');
+
+          const dailyRow = [];
+          if (pdfColumns.name !== false) dailyRow.push(emp.full_name);
+          if (pdfColumns.day !== false) dailyRow.push(dayText);
+          if (pdfColumns.amIn !== false) dailyRow.push(amInVal);
+          if (pdfColumns.amOut !== false) dailyRow.push(amOutVal);
+          if (pdfColumns.pmIn !== false) dailyRow.push(pmInVal);
+          if (pdfColumns.pmOut !== false) dailyRow.push(pmOutVal);
+          if (pdfColumns.totalHrs !== false) dailyRow.push(isSpecialStatus ? (displayStatus === 'LEAVE' ? '8hrs 0mins' : '---') : (hrs > 0 ? formatHoursDuration(hrs) : '0hrs 0mins'));
+          if (pdfColumns.rate !== false) dailyRow.push(hourlyRate > 0 ? `$${hourlyRate.toFixed(2)}/hr` : '---');
+          if (pdfColumns.earnings !== false) dailyRow.push(pay > 0 ? `$${pay.toFixed(2)}` : '---');
+          tableRows.push(dailyRow);
+        }
+      });
+
+      // SUMMARY / TOTAL Row
+      if (isFixed) {
+        const empManualOt = getEmployeeOvertime(emp.id, dateType, dateValue);
+        const absents = empDaysWorked < 5 ? 5 - empDaysWorked : 0;
+        const deduction = (weeklyRate / 5) * absents;
+        let baseEarnings = weeklyRate - deduction;
+        if (baseEarnings < 0) baseEarnings = 0;
+        let earnings = baseEarnings + empManualOt;
+
+        const totalRow = [];
+        if (pdfColumns.name !== false) totalRow.push("TOTAL");
+        if (pdfColumns.day !== false) totalRow.push(pdfColumns.name === false ? "TOTAL" : "");
+        if (pdfColumns.logInRecord !== false) totalRow.push(`Days Worked: ${empDaysWorked} / 5`);
+        totalRow.push(deduction > 0 ? `Deduction: -$${deduction.toFixed(2)}` : 'Full Week');
+        if (pdfColumns.daysWorked !== false) totalRow.push(`${empDaysWorked}`);
+        if (pdfColumns.totalRate !== false) totalRow.push(earnings > 0 ? `$${earnings.toFixed(2)}` : '---');
+        tableRows.push(totalRow);
+      } else {
+        const empManualOt = getEmployeeOvertime(emp.id, dateType, dateValue);
+        const overrideHrs = getGrandTotalOverride(emp.id);
+        const finalHrs = overrideHrs !== undefined ? overrideHrs : empTotalHrs;
+        const totalPay = (finalHrs * hourlyRate) + empManualOt;
+
+        const totalRow = [];
+        if (pdfColumns.name !== false) totalRow.push("TOTAL");
+        if (pdfColumns.day !== false) totalRow.push(pdfColumns.name === false ? "TOTAL" : "");
+        if (pdfColumns.amIn !== false) totalRow.push("");
+        if (pdfColumns.amOut !== false) totalRow.push("");
+        if (pdfColumns.pmIn !== false) totalRow.push("");
+        if (pdfColumns.pmOut !== false) totalRow.push("");
+        if (pdfColumns.totalHrs !== false) totalRow.push(formatHoursDuration(finalHrs));
+        if (pdfColumns.rate !== false) totalRow.push(hourlyRate > 0 ? `$${hourlyRate.toFixed(2)}/hr` : '---');
+        if (pdfColumns.earnings !== false) totalRow.push(totalPay > 0 ? `$${totalPay.toFixed(2)}` : '---');
+        tableRows.push(totalRow);
+      }
+
+      // Check page break
+      const estimatedTableHeight = (tableRows.length + 1) * 7 + 22;
+      if (index > 0 && (currentY + estimatedTableHeight > 190 || dateType === 'month')) {
         doc.addPage();
         currentY = 20;
       }
 
       doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
       doc.setTextColor(30, 41, 59);
-      doc.text(`Salary Slip - ${record.full_name}`, 14, currentY);
+      doc.text(`Salary Slip - ${emp.full_name}`, 14, currentY);
 
       autoTable(doc, {
         head: [tableColumn],
-        body: [row],
+        body: tableRows,
         startY: currentY + 6,
         theme: 'grid',
-        headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 8 },
-        bodyStyles: { textColor: [0, 0, 0], halign: 'center', lineWidth: 0.5, lineColor: [0, 0, 0], fontSize: 12, cellPadding: 8 },
+        headStyles: {
+          fillColor: [59, 130, 246],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          halign: 'center',
+          lineWidth: 0.5,
+          lineColor: [0, 0, 0],
+          fontSize: 10,
+          cellPadding: 5
+        },
+        bodyStyles: {
+          textColor: [0, 0, 0],
+          halign: 'center',
+          lineWidth: 0.5,
+          lineColor: [0, 0, 0],
+          fontSize: 9,
+          cellPadding: 4
+        },
         alternateRowStyles: { fillColor: [248, 250, 252] },
-        styles: { font: 'helvetica', fontSize: 12, cellPadding: 8, fontStyle: 'bold', lineWidth: 0.5, lineColor: [0, 0, 0] },
+        styles: { font: 'helvetica', fontSize: 9, cellPadding: 4, lineWidth: 0.5, lineColor: [0, 0, 0] },
+        didParseCell: function (data) {
+          if (data.row.raw && (data.row.raw[0] === 'TOTAL' || data.row.raw[1] === 'TOTAL')) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [239, 246, 255];
+            data.cell.styles.textColor = [30, 58, 138];
+          }
+        }
       });
 
-      currentY = doc.lastAutoTable.finalY + 20;
+      currentY = doc.lastAutoTable.finalY + 16;
     });
-
-    // Grand total removed as per user preference for separated employee slips
 
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
@@ -1096,6 +1774,7 @@ const AdminDtrPage = () => {
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(100, 116, 139);
+      doc.text(`Page ${i} of ${pageCount}`, 14, 200);
       doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 280, 200, { align: 'right' });
     }
 
@@ -1288,7 +1967,8 @@ const AdminDtrPage = () => {
 
       const grandOverride = getGrandTotalOverride(emp.id);
       const finalTotalHrs = grandOverride !== undefined ? grandOverride : totalHrs;
-      const finalTotalPay = grandOverride !== undefined ? (grandOverride * rate) : totalPay;
+      const empManualOt = getEmployeeOvertime(emp.id, dateType, dateValue);
+      const finalTotalPay = (grandOverride !== undefined ? (grandOverride * rate) : totalPay) + empManualOt;
 
       doc.text(finalTotalHrs.toFixed(2), 150, finalY + 6.5, { align: "right" });
       doc.text(`$${finalTotalPay.toFixed(2)}`, 193, finalY + 6.5, { align: "right" });
@@ -1315,12 +1995,21 @@ const AdminDtrPage = () => {
     const today = new Date();
 
     if (fixedReportDateType === 'month') {
-      const [year, month] = fixedReportDateValue.split('-').map(Number);
+      const val = fixedReportDateValue || today.toISOString().slice(0, 7);
+      const [year, month] = val.split('-').map(Number);
       start = `${year}-${String(month).padStart(2, '0')}-01`;
       const lastDay = new Date(year, month, 0).getDate();
       end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     } else if (fixedReportDateType === 'week') {
-      const [year, month, day] = fixedReportDateValue.split('-').map(Number);
+      let val = fixedReportDateValue;
+      if (!val) {
+        const dayOfWeek = today.getDay();
+        const diff = (dayOfWeek + 7 - 4) % 7;
+        const s = new Date(today);
+        s.setDate(today.getDate() - diff);
+        val = getLocalDateStr(s);
+      }
+      const [year, month, day] = val.split('-').map(Number);
       if (year && month && day) {
         const startObj = new Date(year, month - 1, day);
         start = getLocalDateStr(startObj);
@@ -1329,14 +2018,20 @@ const AdminDtrPage = () => {
         end = getLocalDateStr(endObj);
       }
     } else if (fixedReportDateType === 'day') {
-      start = fixedReportDateValue;
-      end = fixedReportDateValue;
+      const val = fixedReportDateValue || getLocalDateStr(today);
+      start = val;
+      end = val;
     }
 
     setTimeout(() => {
       try {
         if (fixedReportCategory === 'Time Card') {
           exportTimeCardPDF(start, end, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
+        } else if (fixedReportCategory === 'Punch Record') {
+          const emps = fixedReportUsers.includes('all')
+            ? employees
+            : employees.filter(e => fixedReportUsers.includes(String(e.id)));
+          exportPunchReportPDF(emps, start, end, fixedReportDateType, fixedReportDateValue);
         } else {
           exportFixedReportPDF(start, end, fixedReportCategory, fixedReportDateType, fixedReportDateValue, fixedReportUsers);
         }
@@ -1347,106 +2042,332 @@ const AdminDtrPage = () => {
     }, 100);
   };
 
-  const handleEmployeePdfExport = () => {
+  const exportPunchReportPDF = (
+    empsToExport,
+    startStr = null,
+    endStr = null,
+    dateType = dtrFilterType,
+    dateValue = dtrFilterValue,
+    customDays = null
+  ) => {
+    if (!empsToExport || empsToExport.length === 0) {
+      alert("No employees selected for export.");
+      return;
+    }
+
     const doc = new jsPDF({ orientation: 'portrait' });
 
-    doc.setFontSize(18);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(30, 41, 59);
-    doc.text("Attendance Record", 105, 20, { align: "center" });
-
-    doc.setFontSize(11);
-    doc.setTextColor(100, 116, 139);
-    doc.text(`Employee: ${user.full_name}`, 14, 30);
-
-    let filterText = "";
-    if (dtrFilterType === 'month') {
-      const [y, m] = dtrFilterValue.split('-');
-      const d = new Date(y, m - 1);
-      filterText = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    } else if (dtrFilterType === 'week') {
-      filterText = `Week of ${dtrFilterValue}`;
-    } else {
-      filterText = dtrFilterValue;
-    }
-    doc.text(`Period: ${filterText}`, 14, 36);
-
-    const tableColumn = ["DATE", "AM IN", "AM OUT", "PM IN", "PM OUT", "HRS", "STATUS"];
-    const tableRows = [];
-    let totalHrs = 0;
-
-    filteredDays.forEach(dayObj => {
-      const dailyRecords = tableRecords.filter(r => r.date === dayObj.dateStr);
-      const row = dailyRecords[0];
-      const targetUserId = user.id;
-
-      const approvedLeaveForDay = leaveRequests.find(lr =>
-        String(lr.user_id) === String(targetUserId) &&
-        dayObj.dateStr >= lr.start_date &&
-        dayObj.dateStr <= lr.end_date
-      );
-
-      let virtualStatus = '';
-      if (!row) {
-        if (approvedLeaveForDay) {
-          virtualStatus = 'LEAVE';
-        } else {
-          const dailyEvents = events.filter(e => e.event_date === dayObj.dateStr && (e.user_id == targetUserId || e.user_id == 0));
-          const pendingReschedule = dailyEvents.find(e => e.status === 'pending' && e.reschedule_for_event_id);
-          const pendingNew = dailyEvents.find(e => e.status === 'pending' && !e.reschedule_for_event_id);
-          const approved = dailyEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'))
-            || dailyEvents.find(e => e.status === 'approved');
-
-          if (approved) {
-            if (approved.event_type === 'VL') virtualStatus = 'APPROVED LEAVE';
-            else if (approved.event_type === 'HL' || approved.event_type === 'Holiday') virtualStatus = 'HOLIDAY';
-            else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
-              virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
-            }
-            else {
-              virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
-            }
-          } else if (pendingReschedule) {
-            virtualStatus = 'PENDING RESCHEDULE';
-          } else if (pendingNew) {
-            virtualStatus = 'PENDING SCHEDULE';
-          }
+    // Determine days list
+    let daysList = [];
+    if (customDays && customDays.length > 0) {
+      daysList = customDays;
+    } else if (startStr && endStr) {
+      const [sY, sM, sD] = startStr.split('-').map(Number);
+      const [eY, eM, eD] = endStr.split('-').map(Number);
+      const curr = new Date(sY, sM - 1, sD);
+      const endD = new Date(eY, eM - 1, eD);
+      while (curr <= endD) {
+        const y = curr.getFullYear();
+        const m = String(curr.getMonth() + 1).padStart(2, '0');
+        const dt = String(curr.getDate()).padStart(2, '0');
+        const dateStr = `${y}-${m}-${dt}`;
+        const dayName = curr.toLocaleDateString('en-US', { weekday: 'long' });
+        daysList.push({ dateStr, dayNum: curr.getDate(), dayName });
+        curr.setDate(curr.getDate() + 1);
+      }
+    } else if (dateType === 'month') {
+      const val = dateValue || new Date().toISOString().slice(0, 7);
+      const [year, month] = val.split('-').map(Number);
+      const daysInMonth = new Date(year, month, 0).getDate();
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const d = new Date(year, month - 1, day);
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        daysList.push({ dateStr, dayNum: day, dayName });
+      }
+    } else if (dateType === 'week') {
+      let val = dateValue;
+      if (!val) {
+        const today = new Date();
+        const dayOfWeek = today.getDay();
+        const diff = (dayOfWeek + 7 - 4) % 7;
+        const s = new Date(today);
+        s.setDate(today.getDate() - diff);
+        val = getLocalDateStr(s);
+      }
+      const [year, month, day] = val.split('-').map(Number);
+      if (year && month && day) {
+        const start = new Date(year, month - 1, day);
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(start);
+          d.setDate(start.getDate() + i);
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const dt = String(d.getDate()).padStart(2, '0');
+          const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+          daysList.push({ dateStr, dayNum: d.getDate(), dayName });
         }
       }
+    } else if (dateType === 'day') {
+      const val = dateValue || getLocalDateStr(new Date());
+      const parts = val.split('-');
+      if (parts.length === 3) {
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        daysList.push({ dateStr: val, dayNum: parseInt(parts[2], 10), dayName });
+      }
+    }
 
-      const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-      totalHrs += hrs;
+    if (daysList.length === 0) {
+      alert("No dates found for the selected period.");
+      return;
+    }
 
-      const isSpecialStatus = (row && ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(row.status)) || (!row && virtualStatus === 'LEAVE');
-      const displayStatus = row && row.status ? row.status.toUpperCase() : virtualStatus;
+    // Determine period text (dates only without weekday names)
+    let periodText = '';
+    if (dateType === 'month') {
+      const val = dateValue || (daysList[0] ? daysList[0].dateStr.slice(0, 7) : '');
+      const [year, month] = val.split('-').map(Number);
+      const d = new Date(year, month - 1);
+      periodText = d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    } else if (dateType === 'week') {
+      const startD = daysList[0];
+      const endD = daysList[daysList.length - 1];
+      periodText = (startD && endD)
+        ? `${startD.dateStr} to ${endD.dateStr}`
+        : `Week of ${dateValue}`;
+    } else if (dateType === 'day') {
+      const d = daysList[0];
+      periodText = d ? d.dateStr : dateValue;
+    } else {
+      periodText = (startStr && endStr) ? `${startStr} to ${endStr}` : 'All Time';
+    }
 
-      tableRows.push([
-        dayObj.dateStr,
-        isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '--:--'),
-        isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '--:--'),
-        isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '--:--'),
-        isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '--:--'),
-        (displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '')),
-        displayStatus
-      ]);
+    let isFirstPage = true;
+
+    empsToExport.forEach(emp => {
+      if (!isFirstPage) {
+        doc.addPage();
+      }
+      isFirstPage = false;
+
+      const empRecords = records.filter(r => String(r.user_id) === String(emp.id));
+      const isFixedEmp = emp.employee_type === 'Fixed';
+      const empManualOt = getEmployeeOvertime(emp.id, dateType, dateValue);
+      const weeklyRate = parseFloat(emp.weekly_rate || 0);
+      const hourlyRate = parseFloat(emp.hourly_rate || 0);
+
+      // Title
+      doc.setFontSize(18);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 41, 59);
+      doc.text("ATTENDANCE RECORD", 105, 17, { align: "center" });
+
+      doc.setFontSize(13);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(37, 99, 235);
+      doc.text(emp.full_name, 105, 23, { align: "center" });
+
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(71, 85, 105);
+      const rateLabel = isFixedEmp ? `Weekly Rate: $${weeklyRate.toFixed(2)}` : `Rate: $${hourlyRate.toFixed(2)}/hr`;
+      doc.text(rateLabel, 105, 28, { align: "center" });
+
+      let empGrandTotalHrs = 0;
+      const tableRows = [];
+
+      daysList.forEach(dayObj => {
+        const dailyRecords = empRecords.filter(r => r.date === dayObj.dateStr);
+        const row = dailyRecords[0];
+        const targetUserId = emp.id;
+
+        const approvedLeaveForDay = leaveRequests.find(lr =>
+          String(lr.user_id) === String(targetUserId) &&
+          dayObj.dateStr >= lr.start_date &&
+          dayObj.dateStr <= lr.end_date
+        );
+
+        let virtualStatus = '';
+        if (!row) {
+          if (approvedLeaveForDay) {
+            virtualStatus = 'LEAVE';
+          } else {
+            const dailyEvents = events.filter(e => e.event_date === dayObj.dateStr && (e.user_id == targetUserId || e.user_id == 0));
+            const approved = dailyEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'))
+              || dailyEvents.find(e => e.status === 'approved');
+
+            if (approved) {
+              if (approved.event_type === 'VL') virtualStatus = 'APPROVED LEAVE';
+              else if (approved.event_type === 'HL' || approved.event_type === 'Holiday') virtualStatus = 'HOLIDAY';
+            }
+          }
+        }
+
+        const hrs = row ? (parseFloat(row.total_hours) || 0) : 0;
+        const isSpecialStatus = (row && ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(row.status)) || (!row && virtualStatus === 'LEAVE');
+        const displayStatus = row && row.status ? row.status.toUpperCase() : (virtualStatus || '');
+
+        if (row && row.status !== 'Absent') {
+          empGrandTotalHrs += hrs;
+        }
+
+        const dayCell = `${dayObj.dayName}\n${dayObj.dateStr}`;
+
+        if (isFixedEmp) {
+          let logInText = '---';
+          if (isSpecialStatus) logInText = displayStatus || '---';
+          else if (row && row.am_in) logInText = `Logged in at: ${formatTime(row.am_in, row.date)}`;
+          else if (row && row.status === 'Present') logInText = 'Present';
+
+          tableRows.push([
+            dayCell,
+            logInText,
+            hrs > 0 ? formatHoursDuration(hrs) : '---'
+          ]);
+        } else {
+          const amInVal = isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '---');
+          const amOutVal = isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '---');
+          const pmInVal = isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '---');
+          const pmOutVal = isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '---');
+          const totalHrsVal = (displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE')
+            ? '8h'
+            : (isSpecialStatus ? '---' : (hrs > 0 ? formatHoursDuration(hrs) : '---'));
+
+          tableRows.push([
+            dayCell,
+            amInVal,
+            amOutVal,
+            pmInVal,
+            pmOutVal,
+            totalHrsVal
+          ]);
+        }
+      });
+
+      const overrideHrs = getGrandTotalOverride(emp.id);
+      const finalHrs = overrideHrs !== undefined ? overrideHrs : empGrandTotalHrs;
+
+      let totalSalaryPay = 0;
+      if (isFixedEmp) {
+        const daysWorked = daysList.filter(d => {
+          const r = empRecords.find(rec => rec.date === d.dateStr);
+          return r && r.status && r.status !== 'Absent';
+        }).length;
+        const absents = dateType === 'week' && daysWorked < 5 ? 5 - daysWorked : 0;
+        const deduction = (weeklyRate / 5) * absents;
+        totalSalaryPay = Math.max(0, weeklyRate - deduction) + empManualOt;
+      } else {
+        totalSalaryPay = (finalHrs * hourlyRate) + empManualOt;
+      }
+
+      const hrsFormatted = finalHrs > 0 ? formatHoursDuration(finalHrs) : '0hrs 0mins';
+      const payDetail = `Pay: $${totalSalaryPay.toFixed(2)}`;
+
+      if (isFixedEmp) {
+        tableRows.push([
+          { content: 'GRAND TOTAL', colSpan: 2, styles: { halign: 'right', fontStyle: 'bold', fillColor: [241, 245, 249] } },
+          { content: `${hrsFormatted}   |   ${payDetail}`, styles: { halign: 'center', fontStyle: 'bold', textColor: [37, 99, 235], fillColor: [241, 245, 249] } }
+        ]);
+      } else {
+        tableRows.push([
+          { content: 'GRAND TOTAL', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold', fillColor: [241, 245, 249] } },
+          { content: `${hrsFormatted}   |   ${payDetail}`, styles: { halign: 'center', fontStyle: 'bold', textColor: [37, 99, 235], fillColor: [241, 245, 249] } }
+        ]);
+      }
+
+      const tableHead = isFixedEmp ? [
+        [
+          { content: 'DAY', styles: { halign: 'center' } },
+          { content: 'LOG IN RECORD', styles: { halign: 'center' } },
+          { content: 'TOTAL HRS', styles: { halign: 'center' } }
+        ]
+      ] : [
+        [
+          { content: 'DAY', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+          { content: 'AM', colSpan: 2, styles: { halign: 'center' } },
+          { content: 'PM', colSpan: 2, styles: { halign: 'center' } },
+          { content: 'TOTAL HRS', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } }
+        ],
+        [
+          { content: 'IN', styles: { halign: 'center' } },
+          { content: 'OUT', styles: { halign: 'center' } },
+          { content: 'IN', styles: { halign: 'center' } },
+          { content: 'OUT', styles: { halign: 'center' } }
+        ]
+      ];
+
+      autoTable(doc, {
+        head: tableHead,
+        body: tableRows,
+        startY: 32,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [241, 245, 249],
+          textColor: [30, 41, 59],
+          fontStyle: 'bold',
+          fontSize: 9,
+          lineWidth: 0.3,
+          lineColor: [203, 213, 225],
+          cellPadding: 4
+        },
+        bodyStyles: {
+          textColor: [30, 41, 59],
+          fontSize: 8.5,
+          halign: 'center',
+          valign: 'middle',
+          lineWidth: 0.2,
+          lineColor: [226, 232, 240],
+          cellPadding: 3.5
+        },
+        columnStyles: isFixedEmp ? {
+          0: { cellWidth: 52 },
+          1: { cellWidth: 80 },
+          2: { cellWidth: 50, fontStyle: 'bold', textColor: [37, 99, 235] }
+        } : {
+          0: { cellWidth: 42 },
+          1: { cellWidth: 28 },
+          2: { cellWidth: 28 },
+          3: { cellWidth: 28 },
+          4: { cellWidth: 28 },
+          5: { cellWidth: 28, fontStyle: 'bold', textColor: [37, 99, 235] }
+        },
+        alternateRowStyles: {
+          fillColor: [255, 255, 255]
+        }
+      });
     });
 
-    tableRows.push(["TOTAL", "", "", "", "", formatHoursDuration(totalHrs), ""]);
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Page ${i} of ${pageCount}`, 14, 287);
+      doc.text(`Generated: ${new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}`, 196, 287, { align: 'right' });
+    }
 
-    autoTable(doc, {
-      head: [tableColumn],
-      body: tableRows,
-      startY: 42,
-      theme: 'grid',
-      headStyles: { fillColor: [59, 130, 246], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
-      bodyStyles: { textColor: [0, 0, 0], halign: 'center' },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      styles: { font: 'helvetica', fontSize: 9, cellPadding: 4, lineWidth: 0.1, lineColor: [226, 232, 240] },
-      columnStyles: { 0: { halign: 'left' } }
-    });
+    const periodSlug = (dateValue || 'report').replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (empsToExport.length === 1) {
+      const empNameSlug = empsToExport[0].full_name.replace(/[^a-zA-Z0-9_-]/g, '_');
+      doc.save(`Attendance_Record_${empNameSlug}_${periodSlug}.pdf`);
+      logSystemAction('DOWNLOAD_ATTENDANCE', `Admin downloaded Attendance Record Punch PDF for ${empsToExport[0].full_name}.`);
+    } else {
+      doc.save(`Report_Salary_Attendance_Punch_${periodSlug}.pdf`);
+      logSystemAction('DOWNLOAD_PAYROLL', `Admin downloaded Report Salary Attendance Punch PDF.`);
+    }
+  };
 
-    doc.save(`Attendance_Record_${user.full_name}_${dtrFilterValue}.pdf`);
-    logSystemAction('DOWNLOAD_ATTENDANCE', `User/Admin downloaded Attendance Record PDF for ${user.full_name}.`);
+  const exportSingleEmployeePunchPDF = (emp) => {
+    if (!emp) return;
+    const start = filteredDays.length > 0 ? filteredDays[0].dateStr : dtrFilterValue;
+    const end = filteredDays.length > 0 ? filteredDays[filteredDays.length - 1].dateStr : dtrFilterValue;
+    exportPunchReportPDF([emp], start, end, dtrFilterType, dtrFilterValue, filteredDays);
+  };
+
+  const handleEmployeePdfExport = () => {
+    exportSingleEmployeePunchPDF(displayUser || user);
   };
 
   const exportPDF = (customStart = startDate, customEnd = endDate, exportType = 'custom', usersToExport = customExportUsers, category = 'Timed') => {
@@ -1540,10 +2461,30 @@ const AdminDtrPage = () => {
       const rowData = [];
       const overrideHrs = getGrandTotalOverride(record.user_id);
       const recordHrs = overrideHrs !== undefined ? overrideHrs : parseFloat(record.total_hours || 0);
-      const recordRate = parseFloat(record.hourly_rate || employees.find(e => String(e.id) === String(record.user_id))?.hourly_rate || 0);
-      const recordEarnings = recordHrs * recordRate;
+      const empObj = employees.find(e => String(e.id) === String(record.user_id));
+      const recordRate = parseFloat(record.hourly_rate || empObj?.hourly_rate || 0);
+      const recordOtRate = parseFloat(record.ot_rate || empObj?.ot_rate || 0);
+      const isFixed = (empObj?.employee_type || record.employee_type) === 'Fixed';
+      const otThreshold = isFixed ? 10 : 8;
 
+      let recordEarnings = 0;
       if (record.status !== 'Absent') {
+        if (recordHrs > otThreshold) {
+          const regHrs = otThreshold;
+          const otHrs = recordHrs - otThreshold;
+          const effectiveOtRate = recordOtRate > 0 ? recordOtRate : recordRate;
+          recordEarnings = (regHrs * recordRate) + (otHrs * effectiveOtRate);
+        } else {
+          recordEarnings = recordHrs * recordRate;
+        }
+
+        if (exportType === 'monthly' || exportType === 'yearly') {
+          const otType = exportType === 'monthly' ? 'month' : 'year';
+          const otVal = exportType === 'monthly' ? (customStart ? customStart.slice(0, 7) : '') : (customStart ? customStart.slice(0, 4) : '');
+          const empManualOt = getEmployeeOvertime(record.user_id, otType, otVal);
+          recordEarnings += empManualOt;
+        }
+
         grandTotalHrs += recordHrs;
         grandTotalEarnings += recordEarnings;
       }
@@ -1568,6 +2509,14 @@ const AdminDtrPage = () => {
       });
       tableRows.push(rowData);
     });
+
+    if (exportType !== 'monthly' && exportType !== 'yearly') {
+      const uniqueUserIds = [...new Set(recordsToProcess.map(r => r.user_id))];
+      uniqueUserIds.forEach(uid => {
+        const empManualOt = getEmployeeOvertime(uid, exportType === 'weekly' ? 'week' : 'custom', customStart);
+        grandTotalEarnings += empManualOt;
+      });
+    }
 
     const grandTotalRow = [];
     dataKeys.forEach((key, index) => {
@@ -1629,339 +2578,62 @@ const AdminDtrPage = () => {
           </div>
         </div>
       ) : (
-        (() => {
-          let totalScheduled = 0;
-          let totalPresent = 0;
-          let totalLeave = 0;
-          let totalAbsent = 0;
-
-          // Respect active filters for employee type and specific user, and exclude deactivated employees
-          const activeEmployees = employees.filter(emp => {
-            if (emp.is_active !== undefined && parseInt(emp.is_active) === 0) return false;
-            if (tableFilterType !== 'all' && (emp.employee_type || 'Timed') !== tableFilterType) return false;
-            if (tableFilterUser !== 'all' && String(emp.id) !== String(tableFilterUser)) return false;
-            return true;
-          });
-
-          filteredDays.forEach(d => {
-            const dayStr = d.dateStr;
-            const isPast = dayStr < todayDateStr;
-
-            activeEmployees.forEach(emp => {
-              // Find record if exists for this date and employee
-              const row = records.find(r => r.date === dayStr && String(r.user_id) === String(emp.id));
-
-              // Check for approved leave
-              const isOnLeave = leaveRequests.some(lr =>
-                String(lr.user_id) === String(emp.id) &&
-                dayStr >= lr.start_date &&
-                dayStr <= lr.end_date &&
-                (lr.status === 'approved' || lr.status === 'Approved')
-              ) || (row && (row.status === 'Leave' || row.status === 'Approved Leave'));
-
-              // Check for holiday
-              const isHoliday = events.some(e =>
-                e.event_date === dayStr &&
-                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
-                e.status === 'approved' &&
-                (e.event_type === 'Holiday' || e.event_type === 'HL')
-              ) || (row && row.status === 'Holiday');
-
-              // Check if scheduled event in calendar
-              const isScheduledEvent = events.some(e =>
-                e.event_date === dayStr &&
-                (String(e.user_id) === String(emp.id) || e.user_id == 0) &&
-                e.status === 'approved' &&
-                (e.event_type === 'WS' || e.title === 'Work Shift' || (e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'VL'))
-              );
-
-              // Check if clocked in or marked present
-              const isPresent = !isHoliday && (row && (
-                (row.am_in && !row.am_in.includes('1900-01-01')) ||
-                (row.pm_in && !row.pm_in.includes('1900-01-01')) ||
-                row.status === 'Present' ||
-                row.status === 'Late' ||
-                row.status === 'Missing Timeout' ||
-                (parseFloat(row.total_hours) > 0)
-              ));
-
-              // Explicit absent in record
-              const isExplicitAbsent = !isPresent && (row && row.status === 'Absent');
-
-              // Scheduled shift in the past missed (not present, not on leave, not a holiday)
-              const isMissedScheduledShift = !isPresent && !isOnLeave && !isHoliday && isScheduledEvent && isPast;
-
-              const isAbsent = isExplicitAbsent || isMissedScheduledShift;
-
-              // Total scheduled days includes all actual shifts worked, explicit absences, approved leaves, and approved scheduled shifts
-              const isScheduled = isScheduledEvent || isPresent || isExplicitAbsent || (isOnLeave && !isHoliday);
-
-              if (isPresent) totalPresent++;
-              else if (isOnLeave) totalLeave++;
-              else if (isAbsent) totalAbsent++;
-
-              if (isScheduled) totalScheduled++;
-            });
-          });
-
-          return (
-            <div className="admin-summary-boxes" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px', marginBottom: '24px', width: '100%' }}>
-              <div className="premium-summary-card" style={{ '--card-bg': 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', '--card-shadow': 'rgba(59, 130, 246, 0.3)' }}>
-                <div className="bg-icon">
-                  <Users size={100} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 1 }}>
-                  <div style={{ background: 'rgba(255,255,255,0.2)', padding: '8px', borderRadius: '10px' }}>
-                    <Users size={20} color="white" />
-                  </div>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(255,255,255,0.9)' }}>
-                    {dtrFilterType === 'day' ? 'Employees Present' : 'Total Present'}
-                  </span>
-                </div>
-                <span style={{ fontSize: '2.5rem', fontWeight: 800, lineHeight: 1, zIndex: 1 }}>{totalPresent}</span>
+        <div className="admin-summary-boxes">
+          {[
+            {
+              type: 'present',
+              label: dtrFilterType === 'day' ? 'Employees Present' : 'Total Present',
+              value: summaryData.totalPresent,
+              title: 'Click to view Total Present records',
+              Icon: Users,
+              variant: 'present',
+            },
+            {
+              type: 'absent',
+              label: dtrFilterType === 'day' ? 'Absent' : 'Total Absent',
+              value: summaryData.totalAbsent,
+              title: 'Click to view Total Absent records',
+              Icon: X,
+              variant: 'absent',
+            },
+            {
+              type: 'scheduled',
+              label: dtrFilterType === 'day' ? 'Scheduled Today' : 'Total Scheduled',
+              value: summaryData.totalScheduled,
+              title: 'Click to view Total Scheduled shifts',
+              Icon: CalendarDays,
+              variant: 'scheduled',
+            },
+            {
+              type: 'leave',
+              label: dtrFilterType === 'day' ? 'On Leave' : 'Total Leave',
+              value: summaryData.totalLeave,
+              title: 'Click to view Total Leave records',
+              Icon: CalendarIcon,
+              variant: 'leave',
+            },
+          ].map(({ type, label, value, title, Icon, variant }) => (
+            <button
+              key={type}
+              type="button"
+              className={`premium-summary-card summary-card--${variant}`}
+              onClick={() => setSummaryModal({ isOpen: true, type })}
+              title={title}
+            >
+              <div className="summary-card-top">
+                <span className="summary-card-label">{label}</span>
+                <span className="summary-card-icon">
+                  <Icon size={18} strokeWidth={2.2} />
+                </span>
               </div>
-
-              <div className="premium-summary-card" style={{ '--card-bg': 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', '--card-shadow': 'rgba(239, 68, 68, 0.3)' }}>
-                <div className="bg-icon">
-                  <X size={100} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 1 }}>
-                  <div style={{ background: 'rgba(255,255,255,0.2)', padding: '8px', borderRadius: '10px' }}>
-                    <X size={20} color="white" />
-                  </div>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(255,255,255,0.9)' }}>
-                    {dtrFilterType === 'day' ? 'Absent' : 'Total Absent'}
-                  </span>
-                </div>
-                <span style={{ fontSize: '2.5rem', fontWeight: 800, lineHeight: 1, zIndex: 1 }}>{totalAbsent}</span>
+              <div className="summary-card-bottom">
+                <span className="summary-card-value">{value}</span>
+                <span className="summary-card-link">
+                  View list <span className="summary-card-arrow" aria-hidden="true">→</span>
+                </span>
               </div>
-
-              <div className="premium-summary-card" style={{ '--card-bg': 'linear-gradient(135deg, #10b981 0%, #059669 100%)', '--card-shadow': 'rgba(16, 185, 129, 0.3)' }}>
-                <div className="bg-icon">
-                  <CalendarDays size={100} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 1 }}>
-                  <div style={{ background: 'rgba(255,255,255,0.2)', padding: '8px', borderRadius: '10px' }}>
-                    <CalendarDays size={20} color="white" />
-                  </div>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(255,255,255,0.9)' }}>
-                    {dtrFilterType === 'day' ? 'Scheduled Today' : 'Total Scheduled'}
-                  </span>
-                </div>
-                <span style={{ fontSize: '2.5rem', fontWeight: 800, lineHeight: 1, zIndex: 1 }}>{totalScheduled}</span>
-              </div>
-
-              <div className="premium-summary-card" style={{ '--card-bg': 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', '--card-shadow': 'rgba(245, 158, 11, 0.3)' }}>
-                <div className="bg-icon">
-                  <CalendarIcon size={100} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', zIndex: 1 }}>
-                  <div style={{ background: 'rgba(255,255,255,0.2)', padding: '8px', borderRadius: '10px' }}>
-                    <CalendarIcon size={20} color="white" />
-                  </div>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'rgba(255,255,255,0.9)' }}>
-                    {dtrFilterType === 'day' ? 'On Leave' : 'Total Leave'}
-                  </span>
-                </div>
-                <span style={{ fontSize: '2.5rem', fontWeight: 800, lineHeight: 1, zIndex: 1 }}>{totalLeave}</span>
-              </div>
-            </div>
-          );
-        })()
-      )}
-
-      {/* Admin Export Panel */}
-      {isAdmin && (
-        <div className="premium-admin-card" style={{ padding: showExportCenter ? '24px 30px' : '16px 30px' }}>
-          <div
-            className="admin-card-header"
-            style={{
-              borderBottom: showExportCenter ? '1px solid var(--glass-border)' : 'none',
-              marginBottom: showExportCenter ? '24px' : '0',
-              paddingBottom: showExportCenter ? '16px' : '0',
-              cursor: 'pointer'
-            }}
-            onClick={() => setShowExportCenter(!showExportCenter)}
-          >
-            <div className="admin-card-title">
-              <div style={{ padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '8px' }}>
-                <Filter size={20} color="var(--primary)" />
-              </div>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-main)', letterSpacing: '0.5px' }}>Attendance and Payroll Management</h3>
-                {showExportCenter && <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Generate specific reports and payroll records.</p>}
-              </div>
-            </div>
-            <button className="btn btn-ghost" onClick={(e) => { e.stopPropagation(); setShowExportCenter(!showExportCenter); }}>
-              <ChevronDown size={20} style={{ transform: showExportCenter ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s ease' }} />
             </button>
-          </div>
-
-          {showExportCenter && (
-            <div className="animate-fade-in">
-              <div className="admin-controls-surface" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '16px' }}>
-
-                {/* Monthly Export Row */}
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Select Month</label>
-                    <input
-                      type="month"
-                      className="premium-input"
-                      value={exportMonth}
-                      onChange={e => setExportMonth(e.target.value)}
-                    />
-                  </div>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Employee</label>
-                    <MultiSelectDropdown
-                      options={employees}
-                      selected={monthlyExportUsers}
-                      onChange={setMonthlyExportUsers}
-                    />
-                  </div>
-                  <button className="btn btn-primary" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={() => handlePresetExport('monthly')}>
-                    <Download size={16} /> Monthly PDF Export
-                  </button>
-                </div>
-
-                {/* Weekly Export Row */}
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Select Week</label>
-                    <CustomWeekPicker
-                      value={exportWeekStr}
-                      onChange={val => setExportWeekStr(val)}
-                    />
-                  </div>
-                  <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                    <label>Employee</label>
-                    <MultiSelectDropdown
-                      options={employees}
-                      selected={weeklyExportUsers}
-                      onChange={setWeeklyExportUsers}
-                    />
-                  </div>
-                  <button className="btn btn-primary" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={() => handlePresetExport('weekly')}>
-                    <Download size={16} /> Weekly PDF Export
-                  </button>
-                </div>
-
-                {/* Yearly Export Row */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
-                  <div style={{ flex: 1, minWidth: '200px' }}>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Annual Report</label>
-                    <p style={{ margin: '6px 0 0 0', fontSize: '0.9rem', color: 'var(--text-main)' }}>Generate a comprehensive report for the entire previous year automatically.</p>
-                  </div>
-                  <button className="btn btn-outline" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={() => handlePresetExport('yearly')}>
-                    <Download size={16} /> Yearly PDF Export
-                  </button>
-                </div>
-
-                {/* Fixed Report Salary Row */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
-                  <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-main)' }}>Report Salary</div>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '120px' }}>
-                      <label>Category</label>
-                      <select className="premium-input" value={fixedReportCategory} onChange={e => setFixedReportCategory(e.target.value)}>
-                        <option value="Timed">Report Salary - Timed</option>
-                        <option value="Fixed">Report Salary - Fixed</option>
-                        <option value="Time Card">Time Card</option>
-                      </select>
-                    </div>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '120px' }}>
-                      <label>Period Type</label>
-                      <select className="premium-input" value={fixedReportDateType} onChange={(e) => {
-                        const type = e.target.value;
-                        setFixedReportDateType(type);
-                        const today = new Date();
-                        if (type === 'month') {
-                          setFixedReportDateValue(today.toISOString().slice(0, 7));
-                        } else if (type === 'day') {
-                          setFixedReportDateValue(getLocalDateStr(today));
-                        } else if (type === 'week') {
-                          const dayOfWeek = today.getDay();
-                          const diff = (dayOfWeek + 7 - 4) % 7;
-                          const start = new Date(today);
-                          start.setDate(today.getDate() - diff);
-                          setFixedReportDateValue(getLocalDateStr(start));
-                        }
-                      }}>
-                        <option value="month">Specific Month</option>
-                        <option value="week">Specific Week</option>
-                        <option value="day">Specific Day</option>
-                      </select>
-                    </div>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                      <label>Select Period</label>
-                      {fixedReportDateType === 'week' ? (
-                        <CustomWeekPicker value={fixedReportDateValue} onChange={val => setFixedReportDateValue(val)} />
-                      ) : (
-                        <input
-                          type={fixedReportDateType === 'day' ? 'date' : 'month'}
-                          className="premium-input"
-                          value={fixedReportDateValue}
-                          onChange={e => setFixedReportDateValue(e.target.value)}
-                        />
-                      )}
-                    </div>
-                    <div className="premium-select-group" style={{ flex: 1, minWidth: '150px' }}>
-                      <label>Employee</label>
-                      <MultiSelectDropdown
-                        options={fixedReportCategory === 'Time Card' ? employees : employees.filter(e => {
-                          const eType = e.employee_type || 'Timed';
-                          const cat = fixedReportCategory === 'Timed' ? 'Timed' : 'Fixed';
-                          return eType === cat;
-                        })}
-                        selected={fixedReportUsers}
-                        onChange={setFixedReportUsers}
-                      />
-                    </div>
-
-                    {fixedReportCategory !== 'Time Card' && (
-                      <div style={{ width: '100%', marginTop: '16px' }}>
-                        <h4 style={{ color: 'var(--text-main)', marginBottom: '8px', fontSize: '0.9rem' }}>Include Columns:</h4>
-                        <div className="checkbox-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '12px' }}>
-                          <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                            <input type="checkbox" checked={pdfColumns.name} onChange={e => setPdfColumns({ ...pdfColumns, name: e.target.checked })} /> Name
-                          </label>
-                          {fixedReportCategory === 'Fixed' ? (
-                            <>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.daysWorked !== false} onChange={e => setPdfColumns({ ...pdfColumns, daysWorked: e.target.checked })} /> Days Worked
-                              </label>
-                              <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                <input type="checkbox" checked={pdfColumns.totalRate !== false} onChange={e => setPdfColumns({ ...pdfColumns, totalRate: e.target.checked })} /> Total Rate
-                              </label>
-                            </>
-                          ) : (
-                              <>
-                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                  <input type="checkbox" checked={pdfColumns.totalHrs} onChange={e => setPdfColumns({ ...pdfColumns, totalHrs: e.target.checked })} /> Total Hrs
-                                </label>
-                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                  <input type="checkbox" checked={pdfColumns.rate} onChange={e => setPdfColumns({ ...pdfColumns, rate: e.target.checked })} /> Rate
-                                </label>
-                                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
-                                  <input type="checkbox" checked={pdfColumns.earnings} onChange={e => setPdfColumns({ ...pdfColumns, earnings: e.target.checked })} /> Total Pay
-                                </label>
-                              </>
-                            )}
-                        </div>
-                      </div>
-                    )}
-
-                    <button className="btn btn-primary" style={{ padding: '10px 24px', flexShrink: 0 }} onClick={handleFixedReportExport}>
-                      <Download size={16} /> Export PDF
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-
-            </div>
-          )}
+          ))}
         </div>
       )}
 
@@ -1969,25 +2641,27 @@ const AdminDtrPage = () => {
       <div className="dtr-new-design-container">
         <div className="premium-dtr-toolbar">
 
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="toolbar-filters-wrap">
             <div className="toolbar-group">
               <div className="toolbar-label">
-                <ListFilter size={16} /> Filter By
+                <ListFilter size={15} /> Filter By
               </div>
               <select
                 className="toolbar-input"
                 value={dtrFilterType}
                 onChange={handleFilterTypeChange}
               >
-                <option value="month">Specific Month</option>
                 <option value="week">Specific Week</option>
+                <option value="month">Specific Month</option>
                 <option value="day">Specific Day</option>
               </select>
             </div>
 
+            <div className="toolbar-divider"></div>
+
             <div className="toolbar-group">
               <div className="toolbar-label">
-                <CalendarDays size={16} /> Date
+                <CalendarDays size={15} /> Date
               </div>
               {dtrFilterType === 'week' ? (
                 <CustomWeekPicker
@@ -2004,6 +2678,7 @@ const AdminDtrPage = () => {
                 />
               )}
               <button
+                type="button"
                 className="toolbar-today-btn"
                 onClick={handleGoToToday}
                 title="Go to Today"
@@ -2017,7 +2692,7 @@ const AdminDtrPage = () => {
                 <div className="toolbar-divider"></div>
                 <div className="toolbar-group">
                   <div className="toolbar-label">
-                    <Filter size={16} /> Employee Type
+                    <Filter size={15} /> Type
                   </div>
                   <select
                     className="toolbar-input"
@@ -2025,761 +2700,803 @@ const AdminDtrPage = () => {
                     onChange={e => {
                       setTableFilterType(e.target.value);
                       setTableFilterUser('all');
+                      setSelectedEmployeeId(null);
                     }}
                   >
                     <option value="all">All Types</option>
-                    <option value="Timed">Timed Employees</option>
-                    <option value="Fixed">Fixed Employees</option>
+                    <option value="Timed">Timed</option>
+                    <option value="Fixed">Fixed</option>
                   </select>
                 </div>
-                <div className="toolbar-divider"></div>
-                <div className="toolbar-group">
-                  <div className="toolbar-label">
-                    <Users size={16} /> Employee
-                  </div>
-                  <select
-                    className="toolbar-input"
-                    style={{ minWidth: '180px' }}
-                    value={tableFilterUser}
-                    onChange={e => setTableFilterUser(e.target.value)}
-                  >
-                    <option value="all">All Employees</option>
-                    {employees
-                      .filter(emp => tableFilterType === 'all' || (emp.employee_type || 'Timed') === tableFilterType)
-                      .map(emp => (
-                        <option key={emp.id} value={emp.id}>{emp.full_name}</option>
-                      ))
-                    }
-                  </select>
-                </div>
+
+                <button
+                  type="button"
+                  className="toolbar-export-btn"
+                  onClick={() => setShowExportCenter(true)}
+                  title="Open Export Report Settings"
+                >
+                  <Settings size={15} strokeWidth={2} />
+                  <span>Export Report Setting</span>
+                </button>
               </>
             )}
           </div>
-
-          
         </div>
 
-        {displayUser ? (
-          <>
-            <div className="dtr-content-layout">
-              <div className="dtr-sidebar">
-                <div className="daily-attendance-summary">
-                  {displayUser?.employee_type === 'Fixed' ? (
-                    <div className="summary-row">
-                      <span className="summary-label">Logged In:</span>
-                      <span className="summary-value" style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
-                        {displayTodayRecord?.am_in ? formatTime(displayTodayRecord.am_in, displayTodayRecord.date) : '--:--'}
-                      </span>
-                    </div>
-                  ) : (
-                    <>
-                      {/* ── Work Timer Hero Block ── */}
-                      <div className="dtr-work-hero">
-                        <div className="dtr-work-hero-label">
-                          {displayActiveShift && isValidTS(displayActiveShift.am_out) && !isValidTS(displayActiveShift.pm_in)
-                            ? 'Work Duration (AM — On Lunch)'
-                            : 'Work Duration'}
-                        </div>
-                        <div className="dtr-work-hero-timer">
-                          {displayActiveShift ? (
-                            <ActiveTimer activeShift={displayActiveShift} />
-                          ) : displayTodayRecord?.pm_out ? (
-                            <span style={{ color: 'var(--success)' }}>
-                              {displayTodayRecord.total_hours ? formatHoursDuration(displayTodayRecord.total_hours) : '00:00:00'}
-                            </span>
-                          ) : (
-                            <span className="dtr-work-hero-idle">--:--:--</span>
-                          )}
-                        </div>
-                        {displayTodayRecord?.pm_out && <span className="dtr-status-pill dtr-status-pill--done">&#10003; Shift Complete</span>}
-                        {displayActiveShift && !displayTodayRecord?.pm_out && (() => {
-                          const onLunch = isValidTS(displayActiveShift.am_out) && !isValidTS(displayActiveShift.pm_in);
-                          return onLunch
-                            ? <span className="dtr-status-pill dtr-status-pill--live" style={{ background: 'rgba(245,158,11,0.12)', color: '#d97706', borderColor: 'rgba(245,158,11,0.3)' }}>&#x1F374; On Lunch</span>
-                            : <span className="dtr-status-pill dtr-status-pill--live">&#x25CF; Live</span>;
-                        })()}
-                      </div>
-
-                      {/* ── Shift Block: AM IN → PM OUT ── */}
-                      <div className="dtr-punch-card">
-                        <div className="dtr-punch-card-title">
-                          <span className="dtr-punch-card-dot dtr-punch-card-dot--shift"></span>
-                          AM IN &nbsp;–&nbsp; PM OUT
-                        </div>
-                        <div className="dtr-punch-card-row">
-                          <div className="dtr-punch-entry">
-                            <span className="dtr-punch-tag dtr-punch-tag--in">AM IN</span>
-                            <span className="dtr-punch-time">
-                              {displayTodayRecord?.am_in ? formatTime(displayTodayRecord.am_in, displayTodayRecord.date) : '--:--'}
-                            </span>
-                          </div>
-                          <span className="dtr-punch-arrow">&#8594;</span>
-                          <div className="dtr-punch-entry">
-                            <span className="dtr-punch-tag dtr-punch-tag--out">PM OUT</span>
-                            <span className="dtr-punch-time">
-                              {displayTodayRecord?.pm_out ? formatTime(displayTodayRecord.pm_out, displayTodayRecord.date) : '--:--'}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* ── Lunch Block: AM OUT → PM IN ── */}
-                      <div className="dtr-punch-card dtr-punch-card--lunch">
-                        <div className="dtr-punch-card-title">
-                          <span className="dtr-punch-card-dot dtr-punch-card-dot--lunch"></span>
-                          AM OUT &nbsp;–&nbsp; PM IN
-                          {/* Deduction pill — shown only when both AM OUT and PM IN are set */}
-                          {(() => {
-                            const amOutStr = displayTodayRecord?.am_out;
-                            const pmInStr = displayTodayRecord?.pm_in;
-                            const validAmOut = amOutStr && !amOutStr.includes('1900-01-01');
-                            const validPmIn = pmInStr && !pmInStr.includes('1900-01-01');
-                            if (!validAmOut || !validPmIn) return null;
-                            const tOut = new Date(amOutStr.includes(' ') ? amOutStr.replace(/-/g, '/') : `${displayTodayRecord.date} ${amOutStr}`.replace(/-/g, '/'));
-                            const tIn = new Date(pmInStr.includes(' ') ? pmInStr.replace(/-/g, '/') : `${displayTodayRecord.date} ${pmInStr}`.replace(/-/g, '/'));
-                            const actualMins = Math.max(0, Math.round((tIn - tOut) / 60000));
-                            const deductMins = Math.max(30, actualMins);
-                            const rounded = deductMins > actualMins;
-                            return (
-                              <span className={`dtr-deduct-pill ${rounded ? 'dtr-deduct-pill--warn' : 'dtr-deduct-pill--ok'}`}>
-                                -{deductMins}m deducted{rounded ? ' *' : ''}
-                              </span>
-                            );
-                          })()}
-                        </div>
-                        <div className="dtr-punch-card-row">
-                          <div className="dtr-punch-entry">
-                            <span className="dtr-punch-tag dtr-punch-tag--lunch-out">AM OUT</span>
-                            <span className="dtr-punch-time">
-                              {(() => {
-                                const v = displayTodayRecord?.am_out;
-                                return (v && !v.includes('1900-01-01')) ? formatTime(v, displayTodayRecord.date) : '--:--';
-                              })()}
-                            </span>
-                          </div>
-                          <span className="dtr-punch-arrow">&#8594;</span>
-                          <div className="dtr-punch-entry">
-                            <span className="dtr-punch-tag dtr-punch-tag--lunch-in">PM IN</span>
-                            <span className="dtr-punch-time">
-                              {(() => {
-                                const amOut = displayTodayRecord?.am_out;
-                                const pmIn = displayTodayRecord?.pm_in;
-                                const validAmOut = amOut && !amOut.includes('1900-01-01');
-                                const validPmIn = pmIn && !pmIn.includes('1900-01-01');
-                                if (validAmOut && !validPmIn) return <span className="dtr-punch-on-lunch">On lunch…</span>;
-                                return validPmIn ? formatTime(pmIn, displayTodayRecord.date) : '--:--';
-                              })()}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </>
+        <div className="dtr-split-layout">
+          {/* Left Column: Employee Directory + Period Summary Card */}
+          <div className="dtr-left-sidebar">
+            <div className="dtr-directory-panel">
+              <div className="dtr-directory-header">
+                <div className="dtr-directory-title-row">
+                  <span className="dtr-directory-title">
+                    <Users size={16} /> Directory
+                  </span>
+                  <span className="dtr-directory-count-badge">
+                    {directoryEmployees.length} {directoryEmployees.length === 1 ? 'Employee' : 'Employees'}
+                  </span>
+                </div>
+                <div className="dtr-directory-search">
+                  <Search size={14} className="dtr-directory-search-icon" />
+                  <input
+                    type="text"
+                    placeholder="Search name, ID, dept..."
+                    value={employeeSearch}
+                    onChange={e => setEmployeeSearch(e.target.value)}
+                  />
+                  {employeeSearch && (
+                    <button
+                      type="button"
+                      className="dtr-directory-search-clear"
+                      onClick={() => setEmployeeSearch('')}
+                      title="Clear search"
+                    >
+                      <X size={12} />
+                    </button>
                   )}
-                  <div className="summary-row">
-                    <span className="summary-label">Date: </span>
-                    <span className="summary-value">{new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}</span>
+                </div>
+              </div>
+
+              <div className="dtr-directory-list">
+                {directoryEmployees.length === 0 ? (
+                  <div className="dtr-directory-empty">
+                    <p>No employees match your search.</p>
+                    {employeeSearch && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setEmployeeSearch('')}
+                        style={{ marginTop: '8px', fontSize: '0.78rem' }}
+                      >
+                        Clear Search
+                      </button>
+                    )}
                   </div>
-                  <div className="summary-row">
-                    <span className="summary-label">Status:</span>
-                    <span className={`summary-value ${(() => {
-                      if (displayTodayRecord && displayTodayRecord.status !== 'Absent') return 'status-present';
+                ) : (
+                  <>
+                    <div
+                      className={`dtr-directory-item ${!displayUser ? 'active' : ''}`}
+                      onClick={() => {
+                        setSelectedEmployeeId(null);
+                        setTableFilterUser('all');
+                      }}
+                    >
+                      <div className="dtr-directory-avatar">
+                        <Users size={16} />
+                      </div>
+                      <div className="dtr-directory-item-info">
+                        <div className="dtr-directory-item-name-row">
+                          <span className="dtr-directory-item-name">All Employees</span>
+                          <span className="dtr-type-tag dtr-type-tag--timed">All</span>
+                        </div>
+                        <div className="dtr-directory-item-sub">
+                          <span>Show all {directoryEmployees.length} {directoryEmployees.length === 1 ? 'record' : 'records'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {directoryEmployees.map(emp => {
+                      const isSelected = Boolean(displayUser && String(emp.id) === String(displayUser.id));
+                      const summary = getEmployeePeriodSummary(emp.id, emp.employee_type);
+                      const isFixedEmp = emp.employee_type === 'Fixed';
 
-                      const targetId = displayUser ? displayUser.id : user.id;
-                      const todayEvents = events.filter(e => e.event_date === todayDateStr && (e.user_id == targetId || e.user_id == 0));
-                      const approvedHoliday = todayEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'));
-                      const approvedLeave = todayEvents.find(e => e.status === 'approved' && e.event_type === 'VL');
-                      const scheduledShift = todayEvents.find(e => e.status === 'approved' && e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'VL');
+                      return (
+                        <div
+                          key={emp.id}
+                          className={`dtr-directory-item ${isSelected ? 'active' : ''}`}
+                          onClick={() => {
+                            setSelectedEmployeeId(emp.id);
+                            setTableFilterUser(emp.id);
+                          }}
+                        >
+                          <div className="dtr-directory-avatar">
+                            {getInitials(emp.full_name)}
+                          </div>
+                          <div className="dtr-directory-item-info">
+                            <div className="dtr-directory-item-name-row">
+                              <span className="dtr-directory-item-name">{emp.full_name}</span>
+                              <span className={`dtr-type-tag ${isFixedEmp ? 'dtr-type-tag--fixed' : 'dtr-type-tag--timed'}`}>
+                                {isFixedEmp ? 'Fixed' : 'Timed'}
+                              </span>
+                            </div>
+                            <div className="dtr-directory-item-sub">
+                              <span>ID: {emp.employee_id || emp.id}</span>
+                              <span className="dtr-directory-dot">&bull;</span>
+                              <span className="dtr-directory-stat-badge">
+                                {isFixedEmp
+                                  ? `${summary.daysWorked}/5 days`
+                                  : (summary.totalHrs > 0 ? formatHoursDuration(summary.totalHrs) : '0h 00m')}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            </div>
 
-                      if (approvedHoliday || approvedLeave) return 'status-present'; // Just to not show red
+            {/* Period Summary & Quick Payroll Card */}
+            <div className="dtr-period-summary-card">
+              <div className="dtr-period-summary-header">
+                <span className="dtr-period-summary-title">
+                  <Clock size={15} /> Period Summary
+                </span>
+                <span className="dtr-period-scope-pill" title={displayUser ? displayUser.full_name : 'All Employees'}>
+                  {displayUser ? displayUser.full_name : 'All Employees'}
+                </span>
+              </div>
 
-                      const d = new Date(todayDateStr + 'T12:00:00');
-                      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                      if (isWeekend && !scheduledShift) return ''; // blank/neutral for weekends without schedule
+              <div className="dtr-period-summary-body">
+                <div className="dtr-period-meta-row">
+                  <CalendarDays size={13} />
+                  <span>{periodSummary.periodLabel || 'Current Period'}</span>
+                  <span className="dtr-period-meta-sep">&bull;</span>
+                  <span>
+                    {displayUser
+                      ? `${displayUser.employee_type || 'Timed'}`
+                      : `${periodSummary.timedCount} Timed, ${periodSummary.fixedCount} Fixed`}
+                  </span>
+                </div>
 
-                      return 'status-absent';
-                    })()}`}>
-                      {(() => {
-                        if (displayTodayRecord && displayTodayRecord.status !== 'Absent') return displayTodayRecord.status.toLowerCase();
-
-                        const targetId = displayUser ? displayUser.id : user.id;
-                        const todayEvents = events.filter(e => e.event_date === todayDateStr && (e.user_id == targetId || e.user_id == 0));
-                        const approvedHoliday = todayEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'));
-                        const approvedLeave = todayEvents.find(e => e.status === 'approved' && e.event_type === 'VL');
-                        const scheduledShift = todayEvents.find(e => e.status === 'approved' && e.event_type !== 'Holiday' && e.event_type !== 'HL' && e.event_type !== 'VL');
-
-                        if (approvedHoliday) return 'holiday';
-                        if (approvedLeave) return 'approved leave';
-
-                        const d = new Date(todayDateStr + 'T12:00:00');
-                        const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                        if (isWeekend && !scheduledShift) return '';
-
-                        return 'absent';
-                      })()}
+                <div className="dtr-period-metrics-grid">
+                  <div className="dtr-period-metric">
+                    <span className="dtr-period-metric-label">Total Hours</span>
+                    <span className="dtr-period-metric-value">
+                      {periodSummary.totalHours > 0 ? formatHoursDuration(periodSummary.totalHours) : '0hrs 0mins'}
+                    </span>
+                  </div>
+                  <div className="dtr-period-metric">
+                    <span className="dtr-period-metric-label">
+                      {displayUser ? 'Days Worked' : 'With Logs'}
+                    </span>
+                    <span className="dtr-period-metric-value">
+                      {displayUser
+                        ? `${periodSummary.totalDaysWorked} / ${filteredDays.length} days`
+                        : `${periodSummary.employeesWithLogs} / ${displayedEmployees.length} emp`}
+                    </span>
+                  </div>
+                  <div className="dtr-period-metric">
+                    <span className="dtr-period-metric-label">Overtime ($)</span>
+                    <span className="dtr-period-metric-value">
+                      ${periodSummary.totalOvertime.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="dtr-period-metric dtr-period-metric--highlight">
+                    <span className="dtr-period-metric-label">Est. Payroll</span>
+                    <span className="dtr-period-metric-value">
+                      ${periodSummary.totalPayroll.toFixed(2)}
                     </span>
                   </div>
                 </div>
-              </div>
 
-              <div className="dtr-main-panel">
-                <div className="premium-employee-card">
-                  <div className="employee-card-header">
-                    <div className="employee-card-profile">
-                      <div className="employee-info-main">
-                        <h2 className="employee-name">{displayUser.full_name || 'N/A'}</h2>
-                        <span className="employee-role">{displayUser.email || 'N/A'}</span>
-                      </div>
-                    </div>
-                    <div className="employee-id-badge">
-                      Employee ID: {(displayUser.employee_id || displayUser.id) ? String(displayUser.employee_id || displayUser.id).padStart(3, '0') : 'N/A'}
-                    </div>
-                  </div>
-
-                  <div className="employee-card-divider"></div>
-
-                  <div className="employee-card-body">
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Month</span>
-                      <span className="stat-value">{new Date().toLocaleString('en-US', { month: 'short' })}</span>
-                    </div>
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Day</span>
-                      <span className="stat-value">{new Date().toLocaleString('en-US', { day: 'numeric' })}</span>
-                    </div>
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Year</span>
-                      <span className="stat-value">{new Date().toLocaleString('en-US', { year: 'numeric' })}</span>
-                    </div>
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Sex</span>
-                      <span className="stat-value">{displayUser.sex || 'N/A'}</span>
-                    </div>
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Department</span>
-                      <span className="stat-value">{displayUser.department || 'N/A'}</span>
-                    </div>
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Position</span>
-                      <span className="stat-value" style={{ textTransform: 'capitalize' }}>{displayUser.position || displayUser.role || 'N/A'}</span>
-                    </div>
-                    <div className="employee-stat-group">
-                      <span className="stat-label">Employment Status</span>
-                      <span className="stat-value status-active">Active</span>
-                    </div>
-                    {isAdmin && (
-                      <div className="employee-stat-group">
-                        <span className="stat-label">Rate/Hr</span>
-                        <span className="stat-value" style={{ color: 'var(--success)' }}>${displayUser.hourly_rate || '0.00'}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                {displayedEmployees.length > 0 && (
+                  <button
+                    type="button"
+                    className="dtr-period-export-btn"
+                    onClick={() => {
+                      const start = filteredDays.length > 0 ? filteredDays[0].dateStr : dtrFilterValue;
+                      const end = filteredDays.length > 0 ? filteredDays[filteredDays.length - 1].dateStr : dtrFilterValue;
+                      exportPunchReportPDF(displayedEmployees, start, end, dtrFilterType, dtrFilterValue, filteredDays);
+                    }}
+                  >
+                    <Download size={15} />
+                    {displayUser ? `Export ${displayUser.full_name.split(' ')[0]}'s PDF` : `Export All (${displayedEmployees.length}) PDF`}
+                  </button>
+                )}
               </div>
             </div>
+          </div>
 
-            <div className="dtr-table-section" style={{ marginTop: '24px' }}>
-              <div className="dtr-table-title">
-                <span>ATTENDANCE RECORD</span>
-              </div>
-              <div className="table-responsive">
-                <table className="dtr-monthly-table">
-                  <thead>
-                    <tr>
-                      <th rowSpan={2} style={{ width: '60px' }}>DAY</th>
-                      {displayUser?.employee_type === 'Fixed' ? (
-                        <th colSpan={4} rowSpan={2} style={{ minWidth: '320px', width: '400px', textAlign: 'center' }}>LOG IN RECORD</th>
-                      ) : (
-                        <>
-                          <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>AM</th>
-                          <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>PM</th>
-                        </>
-                      )}
-                      <th rowSpan={2} style={{ width: '100px' }}>
-                        {displayUser?.employee_type === 'Fixed' ? 'RATE' : 'TOTAL HRS'}
-                      </th>
-                      {isAdmin && displayUser?.employee_type !== 'Fixed' && <th rowSpan={2} style={{ width: '100px' }}>RATE/HR</th>}
-                      {isAdmin && displayUser?.employee_type === 'Fixed' && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
-                      <th rowSpan={2} style={{ width: '120px' }}>STATUS</th>
-                      {isAdmin && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>ACTIONS</th>}
-                    </tr>
-                    <tr>
-                      {displayUser?.employee_type !== 'Fixed' && (
-                        <>
-                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
-                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
-                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
-                          <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
-                        </>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      let grandTotalHrs = 0;
-                      let grandTotalEarnings = 0;
+          {/* Right Pane: Active Employee / All Employees Timesheet Workspace */}
+          <div className="dtr-timesheet-panel">
+            {displayedEmployees.length > 0 ? (
+              displayedEmployees.map(targetEmp => {
+                const empRecords = records.filter(r => String(r.user_id) === String(targetEmp.id));
+                const isFixedEmp = targetEmp.employee_type === 'Fixed';
 
-                      return (
-                        <>
-                          {filteredDays.map(dayObj => {
-                            const dailyRecords = tableRecords.filter(r => r.date === dayObj.dateStr);
-                            const row = dailyRecords[0];
-                            const targetUserId = displayUser.id;
+                return (
+                  <div key={targetEmp.id} className="dtr-employee-workspace-card">
+                    {/* Active Employee Banner */}
+                    <div className="dtr-active-emp-banner">
+                      <div className="dtr-active-emp-profile">
+                        <div className="dtr-active-emp-avatar">
+                          {getInitials(targetEmp.full_name)}
+                        </div>
+                        <div className="dtr-active-emp-meta">
+                          <div className="dtr-active-emp-name-row">
+                            <h2 className="dtr-active-emp-name">{targetEmp.full_name}</h2>
+                            <span className={`dtr-type-tag ${isFixedEmp ? 'dtr-type-tag--fixed' : 'dtr-type-tag--timed'}`}>
+                              {isFixedEmp ? 'Fixed Employee' : 'Timed Employee'}
+                            </span>
+                          </div>
+                          <div className="dtr-active-emp-details">
+                            <span>{targetEmp.email || 'No email'}</span>
+                            <span className="dtr-meta-sep">&bull;</span>
+                            <span>Dept: {targetEmp.department || 'General'}</span>
+                            <span className="dtr-meta-sep">&bull;</span>
+                            <span>ID: {targetEmp.employee_id || targetEmp.id}</span>
+                            <span className="dtr-meta-sep">&bull;</span>
+                            <span style={{ color: 'var(--success)', fontWeight: 700 }}>
+                              {isFixedEmp
+                                ? `$${parseFloat(targetEmp.weekly_rate || 0).toFixed(2)}/wk`
+                                : `$${parseFloat(targetEmp.hourly_rate || 0).toFixed(2)}/hr`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
 
-                            // Check if this date is covered by an approved leave request.
-                            // Only apply virtual leave status when there is NO actual DTR row for this day,
-                            // so that admin edits (which create/update a row) always take precedence.
-                            const approvedLeaveForDay = leaveRequests.find(lr =>
-                              String(lr.user_id) === String(targetUserId) &&
-                              dayObj.dateStr >= lr.start_date &&
-                              dayObj.dateStr <= lr.end_date
-                            );
-
-                            let virtualStatus = '';
-                            if (!row) {
-                              // If covered by an approved leave request and no DTR row exists, show LEAVE
-                              if (approvedLeaveForDay) {
-                                virtualStatus = 'LEAVE';
-                              } else {
-                                const dailyEvents = events.filter(e => e.event_date === dayObj.dateStr && (e.user_id == targetUserId || e.user_id == 0));
-                                const pendingReschedule = dailyEvents.find(e => e.status === 'pending' && e.reschedule_for_event_id);
-                                const pendingNew = dailyEvents.find(e => e.status === 'pending' && !e.reschedule_for_event_id);
-
-                                // Prioritize holiday over leave for display if both exist, or just use the first approved
-                                const approved = dailyEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'))
-                                  || dailyEvents.find(e => e.status === 'approved');
-
-                                if (approved) {
-                                  if (approved.event_type === 'VL') virtualStatus = 'APPROVED LEAVE';
-                                  else if (approved.event_type === 'HL' || approved.event_type === 'Holiday') virtualStatus = 'HOLIDAY';
-                                  else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
-                                    virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
-                                  }
-                                  else {
-                                    virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
-                                  }
-                                } else if (pendingReschedule) {
-                                  virtualStatus = 'PENDING RESCHEDULE';
-                                } else if (pendingNew) {
-                                  virtualStatus = 'PENDING SCHEDULE';
-                                }
-                              }
-                            }
-                            // If a real DTR row exists, it always wins — never overlay leave/event virtualStatus on top of it.
-
-                            const isFixedUser = displayUser?.employee_type === 'Fixed';
-                            const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-                            const rate = row
-                              ? (isFixedUser ? (parseFloat(row.weekly_rate) || parseFloat(displayUser?.weekly_rate) || 0) : (parseFloat(row.hourly_rate) || parseFloat(displayUser?.hourly_rate) || 0))
-                              : (isFixedUser ? parseFloat(displayUser?.weekly_rate || 0) : parseFloat(displayUser?.hourly_rate || 0));
-                            const earnings = isFixedUser ? rate : hrs * rate;
-
-                            grandTotalHrs += hrs;
-                            grandTotalEarnings += earnings;
-
-                            const isSpecialStatus = (row && ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(row.status)) || (!row && virtualStatus === 'LEAVE');
-                            const displayStatus = row && row.status ? row.status.toUpperCase() : virtualStatus;
-
-                            let statusColor = 'inherit';
-                            if (row?.status === 'Absent') statusColor = 'var(--danger)';
-                            else if (row?.status === 'Missing Timeout') statusColor = 'var(--danger)';
-                            else if (row?.status === 'Rescheduled') statusColor = 'var(--warning, #f59e0b)';
-                            else if (isSpecialStatus) statusColor = 'var(--primary)';
-                            else if (virtualStatus === 'LEAVE') statusColor = 'var(--primary)';
-                            else if (virtualStatus) statusColor = 'var(--text-muted)';
-                            else statusColor = 'inherit'; // Default to inherit for anything else (like Present)
-
-                            // If we are falling back to '----', use the faint color
-                            if (!row && !virtualStatus) {
-                              statusColor = 'rgba(0, 0, 0, 0.15)';
-                            }
-
-                            return (
-                              <tr key={dayObj.dateStr}>
-                                                                <td className="dtr-day-col" style={{ width: '120px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
-                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
-                                      <span>{dayObj.dateStr}</span>
-                                    </div>
-                                  </td>
-                                {displayUser?.employee_type === 'Fixed' ? (
-                                  <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                    {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
-                                  </td>
-                                ) : (
-                                  <>
-                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                      {isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '---')}
-                                    </td>
-                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                      {isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '---')}
-                                    </td>
-                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                      {isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '---')}
-                                    </td>
-                                    <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                      {isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '---')}
-                                    </td>
-                                  </>
-                                )}
-                                <td style={{ fontWeight: 600, color: 'var(--primary)' }}>
-                                  {displayUser?.employee_type === 'Fixed'
-                                    ? (rate ? `$${rate.toFixed(2)}` : '---')
-                                    : ((displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '---')))}
-                                </td>
-                                {isAdmin && displayUser?.employee_type !== 'Fixed' && <td>{rate ? `$${rate.toFixed(2)}` : '---'}</td>}
-                                {isAdmin && displayUser?.employee_type === 'Fixed' && (
-                                  <td style={{ fontWeight: 600, color: 'var(--text-main)', textAlign: 'center' }}>
-                                    {hrs > 0 ? formatHoursDuration(hrs) : '---'}
-                                  </td>
-                                )}
-                                <td style={{ fontWeight: 600, color: statusColor }}>
-                                  {displayStatus || '----'}
-                                </td>
-                                {isAdmin && (
-                                  <td style={{ textAlign: 'center' }}>
-                                    <div className="dtr-action-icons" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                      {row ? (
-                                        <>
-                                          <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId, displayUser)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
-                                            <Edit size={16} />
-                                          </button>
-                                          <button className="btn-icon text-danger" onClick={() => handleDeleteRecord(row.id)} title="Delete Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}>
-                                            <Trash2 size={16} />
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <button onClick={() => openEditModal(null, dayObj, targetUserId, displayUser)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
-                                          <Plus size={14} /> Add
-                                        </button>
-                                      )}
-                                    </div>
-                                  </td>
-                                )}
-                              </tr>
-                            );
-                          })}
-                          {(() => {
-                            const overrideVal = getGrandTotalOverride(displayUser?.id);
-                            const isEdited = overrideVal !== undefined;
-                            const finalHrs = isEdited ? overrideVal : grandTotalHrs;
-
-                            return (
-                              <tr className="grand-total-row">
-                                <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
-                                <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
-                                  {displayUser?.employee_type === 'Fixed' ? '' : (
-                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                                      <span>{finalHrs > 0 ? formatHoursDuration(finalHrs) : '0hrs 0mins'}</span>
-                                      {isEdited && (
-                                        <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                          Manual
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                </td>
-                                {isAdmin && displayUser?.employee_type !== 'Fixed' && <td></td>}
-                                {isAdmin && displayUser?.employee_type === 'Fixed' && (
-                                  <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
-                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                                      <span>{formatHoursDuration(finalHrs)}</span>
-                                      {isEdited && (
-                                        <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                          Manual
-                                        </span>
-                                      )}
-                                    </div>
-                                  </td>
-                                )}
-                                <td></td>
-                                {isAdmin && (
-                                  <td style={{ textAlign: 'center' }}>
-                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
-                                      <button
-                                        type="button"
-                                        className="btn-icon text-primary"
-                                        onClick={() => openGrandTotalModal(displayUser?.id, displayUser?.full_name, grandTotalHrs)}
-                                        title="Edit Grand Total"
-                                        style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', cursor: 'pointer', color: 'var(--primary)', padding: '4px 8px', borderRadius: '6px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
-                                      >
-                                        <Edit size={13} /> Edit
-                                      </button>
-                                      {isEdited && (
-                                        <button
-                                          type="button"
-                                          className="btn-icon"
-                                          onClick={() => resetGrandTotalOverride(displayUser?.id, displayUser?.full_name)}
-                                          title="Reset to Calculated"
-                                          style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', color: 'var(--danger)', padding: '4px 6px', borderRadius: '6px' }}
-                                        >
-                                          <RotateCcw size={13} />
-                                        </button>
-                                      )}
-                                    </div>
-                                  </td>
-                                )}
-                              </tr>
-                            );
-                          })()}
-                        </>
-                      );
-                    })()}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="dtr-all-employees-view">
-            {employees
-              .filter(emp => tableFilterType === 'all' || (emp.employee_type || 'Timed') === tableFilterType)
-              .map((emp, index) => {
-              const empRecords = tableRecords.filter(r => String(r.user_id) === String(emp.id));
-              let grandTotalHrs = 0;
-              let grandTotalEarnings = 0;
-
-              return (
-                <div key={emp.id} className="dtr-table-section" style={{ marginTop: index === 0 ? '0' : '40px' }}>
-                  <div className="dtr-table-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>ATTENDANCE RECORD - <span style={{ color: 'var(--primary)' }}>{emp.full_name}</span></span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ID: {emp.employee_id || emp.id}</span>
-                  </div>
-                  <div className="table-responsive">
-                    <table className="dtr-monthly-table">
-                      <thead>
-                        <tr>
-                          <th rowSpan={2} style={{ width: '60px' }}>DAY</th>
-                          {emp.employee_type === 'Fixed' ? (
-                            <th colSpan={4} rowSpan={2} style={{ minWidth: '320px', width: '400px', textAlign: 'center' }}>LOG IN RECORD</th>
+                      <div className="dtr-active-emp-actions">
+                        {/* Overtime Controls */}
+                        <div className="dtr-ot-container" title={`Overtime for this ${dtrFilterType}`}>
+                          <span className="dtr-ot-label">
+                            {dtrFilterType === 'month' ? 'OT Total' : 'OT ($)'}:
+                          </span>
+                          {dtrFilterType === 'month' ? (
+                            <span className="dtr-ot-total-badge" title="Sum of weekly and daily OT for this month">
+                              ${getEmployeeOvertime(targetEmp.id, 'month', dtrFilterValue).toFixed(2)}
+                            </span>
                           ) : (
-                            <>
-                              <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>AM</th>
-                              <th colSpan={2} style={{ minWidth: '160px', width: '200px', textAlign: 'center' }}>PM</th>
-                            </>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                              <div className="dtr-ot-input-wrap">
+                                <span className="dtr-ot-currency">$</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  placeholder="0.00"
+                                  className="dtr-ot-input"
+                                  value={
+                                    otInputValues[`${targetEmp.id}_${dtrFilterType}_${dtrFilterValue}`] !== undefined
+                                      ? otInputValues[`${targetEmp.id}_${dtrFilterType}_${dtrFilterValue}`]
+                                      : (getDirectOvertime(targetEmp.id, dtrFilterType, dtrFilterValue) > 0 ? getDirectOvertime(targetEmp.id, dtrFilterType, dtrFilterValue) : '')
+                                  }
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setOtInputValues(prev => ({
+                                      ...prev,
+                                      [`${targetEmp.id}_${dtrFilterType}_${dtrFilterValue}`]: val
+                                    }));
+                                  }}
+                                  onBlur={(e) => {
+                                    const val = e.target.value;
+                                    handleSaveOvertime(targetEmp.id, dtrFilterType, dtrFilterValue, val);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.target.blur();
+                                    }
+                                  }}
+                                  title={`Enter ${dtrFilterType} Overtime ($) for ${targetEmp.full_name}`}
+                                />
+                              </div>
+                              {dtrFilterType === 'week' && getEmployeeDailyOvertimeForWeek(targetEmp.id, dtrFilterValue) > 0 && (
+                                <span
+                                  className="dtr-ot-total-badge"
+                                  title={`Daily OT: $${getEmployeeDailyOvertimeForWeek(targetEmp.id, dtrFilterValue).toFixed(2)} + Weekly: $${getDirectOvertime(targetEmp.id, 'week', dtrFilterValue).toFixed(2)}`}
+                                  style={{ fontSize: '0.8rem', padding: '2px 6px' }}
+                                >
+                                  Total: ${getEmployeeOvertime(targetEmp.id, 'week', dtrFilterValue).toFixed(2)}
+                                </span>
+                              )}
+                            </div>
                           )}
-                          <th rowSpan={2} style={{ width: '100px' }}>
-                            {emp.employee_type === 'Fixed' ? 'RATE' : 'TOTAL HRS'}
-                          </th>
-                          {isAdmin && emp.employee_type !== 'Fixed' && <th rowSpan={2} style={{ width: '100px' }}>RATE/HR</th>}
-                          {isAdmin && emp.employee_type === 'Fixed' && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
-                          <th rowSpan={2} style={{ width: '120px' }}>STATUS</th>
-                          {isAdmin && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>ACTIONS</th>}
-                        </tr>
-                        <tr>
-                          {emp.employee_type !== 'Fixed' && (
-                            <>
-                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
-                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
-                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>IN</th>
-                              <th style={{ minWidth: '80px', width: '100px', textAlign: 'center' }}>OUT</th>
-                            </>
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredDays.map(dayObj => {
-                          const dailyRecords = empRecords.filter(r => r.date === dayObj.dateStr);
-                          const row = dailyRecords[0];
-                          const targetUserId = emp.id;
+                        </div>
 
-                          const approvedLeaveForDay = leaveRequests.find(lr =>
-                            String(lr.user_id) === String(targetUserId) &&
-                            dayObj.dateStr >= lr.start_date &&
-                            dayObj.dateStr <= lr.end_date
-                          );
+                        <button
+                          type="button"
+                          className="dtr-download-btn"
+                          onClick={() => exportSingleEmployeePunchPDF(targetEmp)}
+                          title={`Download Attendance Record PDF for ${targetEmp.full_name}`}
+                        >
+                          <Download size={16} /> Export PDF
+                        </button>
+                      </div>
+                    </div>
 
-                          let virtualStatus = '';
-                          if (!row) {
-                            if (approvedLeaveForDay) {
-                              virtualStatus = 'LEAVE';
-                            } else {
-                              const dailyEvents = events.filter(e => e.event_date === dayObj.dateStr && (e.user_id == targetUserId || e.user_id == 0));
-                              const pendingReschedule = dailyEvents.find(e => e.status === 'pending' && e.reschedule_for_event_id);
-                              const pendingNew = dailyEvents.find(e => e.status === 'pending' && !e.reschedule_for_event_id);
+                    {/* Attendance Record Table */}
+                    <div className="dtr-table-section">
+                      <div className="dtr-table-title">
+                        <span>ATTENDANCE RECORD &bull; {targetEmp.full_name}</span>
+                      </div>
 
-                              const approved = dailyEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'))
-                                || dailyEvents.find(e => e.status === 'approved');
-
-                              if (approved) {
-                                if (approved.event_type === 'VL') virtualStatus = 'APPROVED LEAVE';
-                                else if (approved.event_type === 'HL' || approved.event_type === 'Holiday') virtualStatus = 'HOLIDAY';
-                                else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
-                                  virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
-                                }
-                                else {
-                                  virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
-                                }
-                              } else if (pendingReschedule) {
-                                virtualStatus = 'PENDING RESCHEDULE';
-                              } else if (pendingNew) {
-                                virtualStatus = 'PENDING SCHEDULE';
-                              }
-                            }
-                          }
-
-                          const isFixedEmp = emp.employee_type === 'Fixed';
-                          const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
-                          const rate = row
-                            ? (isFixedEmp ? (parseFloat(row.weekly_rate) || parseFloat(emp.weekly_rate) || 0) : (parseFloat(row.hourly_rate) || parseFloat(emp.hourly_rate) || 0))
-                            : (isFixedEmp ? parseFloat(emp.weekly_rate || 0) : parseFloat(emp.hourly_rate || 0));
-                          const earnings = isFixedEmp ? rate : hrs * rate;
-
-                          grandTotalHrs += hrs;
-                          grandTotalEarnings += earnings;
-
-                          const isSpecialStatus = (row && ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(row.status)) || (!row && virtualStatus === 'LEAVE');
-                          const displayStatus = row && row.status ? row.status.toUpperCase() : virtualStatus;
-
-                          let statusColor = 'inherit';
-                          if (row?.status === 'Absent') statusColor = 'var(--danger)';
-                          else if (row?.status === 'Missing Timeout') statusColor = 'var(--danger)';
-                          else if (row?.status === 'Rescheduled') statusColor = 'var(--warning, #f59e0b)';
-                          else if (isSpecialStatus) statusColor = 'var(--primary)';
-                          else if (virtualStatus === 'LEAVE') statusColor = 'var(--primary)';
-                          else if (virtualStatus) statusColor = 'var(--text-muted)';
-                          else statusColor = 'inherit';
-
-                          if (!row && !virtualStatus) {
-                            statusColor = 'rgba(0, 0, 0, 0.15)';
-                          }
-
-                          return (
-                            <tr key={`${emp.id}-${dayObj.dateStr}`}>
-                                                              <td className="dtr-day-col" style={{ width: '120px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
-                                      <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
-                                      <span>{dayObj.dateStr}</span>
-                                    </div>
-                                  </td>
-                              {emp.employee_type === 'Fixed' ? (
-                                <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                  {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
-                                </td>
+                      <div className="table-responsive">
+                        <table className="dtr-monthly-table">
+                          <thead>
+                            <tr>
+                              <th rowSpan={2} style={{ width: '130px' }}>DAY</th>
+                              {isFixedEmp ? (
+                                <th colSpan={4} rowSpan={2} style={{ minWidth: '280px', textAlign: 'center' }}>LOG IN RECORD</th>
                               ) : (
                                 <>
-                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                    {isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '---')}
-                                  </td>
-                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                    {isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '---')}
-                                  </td>
-                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                    {isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '---')}
-                                  </td>
-                                  <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
-                                    {isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '---')}
-                                  </td>
+                                  <th colSpan={2} style={{ minWidth: '160px', textAlign: 'center' }}>AM</th>
+                                  <th colSpan={2} style={{ minWidth: '160px', textAlign: 'center' }}>PM</th>
                                 </>
                               )}
-                              <td style={{ fontWeight: 600, color: 'var(--primary)' }}>
-                                {emp.employee_type === 'Fixed'
-                                  ? (rate ? `$${rate.toFixed(2)}` : '---')
-                                  : ((displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '---')))}
-                              </td>
-                              {isAdmin && emp.employee_type !== 'Fixed' && <td>{rate ? `$${rate.toFixed(2)}` : '---'}</td>}
-                              {isAdmin && emp.employee_type === 'Fixed' && (
-                                <td style={{ fontWeight: 600, color: 'var(--text-main)', textAlign: 'center' }}>
-                                  {hrs > 0 ? formatHoursDuration(hrs) : '---'}
-                                </td>
-                              )}
-                              <td style={{ fontWeight: 600, color: statusColor }}>
-                                {displayStatus || '----'}
-                              </td>
-                              {isAdmin && (
-                                <td style={{ textAlign: 'center' }}>
-                                  <div className="dtr-action-icons" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                                    {row ? (
-                                      <>
-                                        <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId, emp)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
-                                          <Edit size={16} />
-                                        </button>
-                                        <button className="btn-icon text-danger" onClick={() => handleDeleteRecord(row.id)} title="Delete Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}>
-                                          <Trash2 size={16} />
-                                        </button>
-                                      </>
-                                    ) : (
-                                      <button onClick={() => openEditModal(null, dayObj, targetUserId, emp)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
-                                        <Plus size={14} /> Add
-                                      </button>
-                                    )}
-                                  </div>
-                                </td>
+                              <th rowSpan={2} style={{ width: '110px' }}>
+                                {isFixedEmp ? 'RATE' : 'TOTAL HRS'}
+                              </th>
+                              {!isFixedEmp && <th rowSpan={2} style={{ width: '100px' }}>RATE/HR</th>}
+                              {isFixedEmp && <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>HOURS</th>}
+                              <th rowSpan={2} style={{ width: '130px' }}>STATUS</th>
+                              <th rowSpan={2} style={{ width: '100px', textAlign: 'center' }}>ACTIONS</th>
+                            </tr>
+                            <tr>
+                              {!isFixedEmp && (
+                                <>
+                                  <th style={{ minWidth: '80px', textAlign: 'center' }}>IN</th>
+                                  <th style={{ minWidth: '80px', textAlign: 'center' }}>OUT</th>
+                                  <th style={{ minWidth: '80px', textAlign: 'center' }}>IN</th>
+                                  <th style={{ minWidth: '80px', textAlign: 'center' }}>OUT</th>
+                                </>
                               )}
                             </tr>
+                          </thead>
+                          <tbody>
+                            {(() => {
+                              let grandTotalHrs = 0;
+                              let grandTotalEarnings = 0;
+
+                              return (
+                                <>
+                                  {filteredDays.map(dayObj => {
+                                    const dailyRecords = empRecords.filter(r => r.date === dayObj.dateStr);
+                                    const row = dailyRecords[0];
+                                    const targetUserId = targetEmp.id;
+
+                                    const approvedLeaveForDay = leaveRequests.find(lr =>
+                                      String(lr.user_id) === String(targetUserId) &&
+                                      dayObj.dateStr >= lr.start_date &&
+                                      dayObj.dateStr <= lr.end_date
+                                    );
+
+                                    let virtualStatus = '';
+                                    if (!row) {
+                                      if (approvedLeaveForDay) {
+                                        virtualStatus = 'LEAVE';
+                                      } else {
+                                        const dailyEvents = events.filter(e => e.event_date === dayObj.dateStr && (e.user_id == targetUserId || e.user_id == 0));
+                                        const pendingReschedule = dailyEvents.find(e => e.status === 'pending' && e.reschedule_for_event_id);
+                                        const pendingNew = dailyEvents.find(e => e.status === 'pending' && !e.reschedule_for_event_id);
+
+                                        const approved = dailyEvents.find(e => e.status === 'approved' && (e.event_type === 'Holiday' || e.event_type === 'HL'))
+                                          || dailyEvents.find(e => e.status === 'approved');
+
+                                        if (approved) {
+                                          if (approved.event_type === 'VL') virtualStatus = 'APPROVED LEAVE';
+                                          else if (approved.event_type === 'HL' || approved.event_type === 'Holiday') virtualStatus = 'HOLIDAY';
+                                          else if (approved.event_type === 'WS' || approved.title === 'Work Shift') {
+                                            virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
+                                          } else {
+                                            virtualStatus = (new Date(dayObj.dateStr) < new Date(todayDateStr)) ? 'ABSENT' : 'SCHEDULED';
+                                          }
+                                        } else if (pendingReschedule) {
+                                          virtualStatus = 'PENDING RESCHEDULE';
+                                        } else if (pendingNew) {
+                                          virtualStatus = 'PENDING SCHEDULE';
+                                        }
+                                      }
+                                    }
+
+                                    const hrs = row ? parseFloat(row.total_hours) || 0 : 0;
+                                    const rate = row
+                                      ? (isFixedEmp ? (parseFloat(row.weekly_rate) || parseFloat(targetEmp?.weekly_rate) || 0) : (parseFloat(row.hourly_rate) || parseFloat(targetEmp?.hourly_rate) || 0))
+                                      : (isFixedEmp ? parseFloat(targetEmp?.weekly_rate || 0) : parseFloat(targetEmp?.hourly_rate || 0));
+                                    const earnings = isFixedEmp ? rate : hrs * rate;
+
+                                    grandTotalHrs += hrs;
+                                    grandTotalEarnings += earnings;
+
+                                    const isSpecialStatus = (row && ['Absent', 'Leave', 'Holiday', 'Rescheduled'].includes(row.status)) || (!row && virtualStatus === 'LEAVE');
+                                    const displayStatus = row && row.status ? row.status.toUpperCase() : virtualStatus;
+
+                                    return (
+                                      <tr key={dayObj.dateStr}>
+                                        <td className="dtr-day-col">
+                                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: '1.2' }}>
+                                            <span style={{ fontSize: '0.78em', color: 'var(--text-muted)' }}>{dayObj.dayName}</span>
+                                            <span style={{ fontWeight: 600 }}>{dayObj.dateStr}</span>
+                                          </div>
+                                        </td>
+                                        {isFixedEmp ? (
+                                          <td colSpan={4} style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                            {isSpecialStatus ? '---' : (row && row.am_in ? `Logged in at: ${formatTime(row.am_in, row.date)}` : '---')}
+                                          </td>
+                                        ) : (
+                                          <>
+                                            <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                              {isSpecialStatus ? '---' : (row && row.am_in ? formatTime(row.am_in, row.date) : '---')}
+                                            </td>
+                                            <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                              {isSpecialStatus ? '---' : (row && row.am_out ? formatTime(row.am_out, row.date) : '---')}
+                                            </td>
+                                            <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                              {isSpecialStatus ? '---' : (row && row.pm_in ? formatTime(row.pm_in, row.date) : '---')}
+                                            </td>
+                                            <td style={{ color: 'var(--text-main)', fontWeight: 600, textAlign: 'center' }}>
+                                              {isSpecialStatus ? '---' : (row && row.pm_out ? formatTime(row.pm_out, row.date) : '---')}
+                                            </td>
+                                          </>
+                                        )}
+                                        <td style={{ fontWeight: 600, color: 'var(--primary)' }}>
+                                          {isFixedEmp
+                                            ? (rate ? `$${rate.toFixed(2)}` : '---')
+                                            : ((displayStatus === 'LEAVE' || displayStatus === 'APPROVED LEAVE') ? '8h' : (isSpecialStatus ? '---' : (hrs ? formatHoursDuration(hrs) : '---')))}
+                                        </td>
+                                        {!isFixedEmp && <td>{rate ? `$${rate.toFixed(2)}` : '---'}</td>}
+                                        {isFixedEmp && (
+                                          <td style={{ fontWeight: 600, color: 'var(--text-main)', textAlign: 'center' }}>
+                                            {hrs > 0 ? formatHoursDuration(hrs) : '---'}
+                                          </td>
+                                        )}
+                                        <td>
+                                          {renderStatusBadge(displayStatus, isSpecialStatus)}
+                                        </td>
+                                        <td style={{ textAlign: 'center' }}>
+                                          <div className="dtr-action-icons" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                            {row ? (
+                                              <>
+                                                <button className="btn-icon text-primary" onClick={() => openEditModal(row, dayObj, targetUserId, targetEmp)} title="Edit Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)' }}>
+                                                  <Edit size={16} />
+                                                </button>
+                                                <button className="btn-icon text-danger" onClick={() => handleDeleteRecord(row.id)} title="Delete Record" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}>
+                                                  <Trash2 size={16} />
+                                                </button>
+                                              </>
+                                            ) : (
+                                              <button onClick={() => openEditModal(null, dayObj, targetUserId, targetEmp)} title="Add Record" style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', cursor: 'pointer', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
+                                                <Plus size={14} /> Add
+                                              </button>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {(() => {
+                                    const overrideVal = getGrandTotalOverride(targetEmp.id);
+                                    const isEdited = overrideVal !== undefined;
+                                    const finalHrs = isEdited ? overrideVal : grandTotalHrs;
+
+                                    return (
+                                      <tr className="grand-total-row">
+                                        <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
+                                        <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
+                                          {isFixedEmp ? '' : (
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: '100%' }}>
+                                              <span>{finalHrs > 0 ? formatHoursDuration(finalHrs) : '0hrs 0mins'}</span>
+                                              {isEdited && (
+                                                <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                                  Manual
+                                                </span>
+                                              )}
+                                            </div>
+                                          )}
+                                        </td>
+                                        {!isFixedEmp && <td></td>}
+                                        {isFixedEmp && (
+                                          <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
+                                            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: '100%' }}>
+                                              <span>{formatHoursDuration(finalHrs)}</span>
+                                              {isEdited && (
+                                                <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                                  Manual
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                        )}
+                                        <td></td>
+                                        <td style={{ textAlign: 'center' }}>
+                                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                                            <button
+                                              type="button"
+                                              className="btn-icon text-primary"
+                                              onClick={() => openGrandTotalModal(targetEmp.id, targetEmp.full_name, grandTotalHrs)}
+                                              title="Edit Grand Total"
+                                              style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', cursor: 'pointer', color: 'var(--primary)', padding: '4px 8px', borderRadius: '6px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
+                                            >
+                                              <Edit size={13} /> Edit
+                                            </button>
+                                            {isEdited && (
+                                              <button
+                                                type="button"
+                                                className="btn-icon"
+                                                onClick={() => resetGrandTotalOverride(targetEmp.id, targetEmp.full_name)}
+                                                title="Reset to Calculated"
+                                                style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', color: 'var(--danger)', padding: '4px 6px', borderRadius: '6px' }}
+                                              >
+                                                <RotateCcw size={13} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })()}
+                                </>
+                              );
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="dtr-empty-state">
+                <Users size={48} style={{ opacity: 0.3 }} />
+                <h3>No Employees Found</h3>
+                <p>Try adjusting your type filter or directory search query.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Attendance and Payroll Reports Modal */}
+      {isAdmin && showExportCenter && (
+        <div
+          className="dtr-modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowExportCenter(false);
+          }}
+        >
+          <div className="dtr-modal-content dtr-modal-export">
+            <div className="dtr-modal-header dtr-export-modal-header">
+              <div className="dtr-export-header-title">
+                <div className="dtr-export-header-icon">
+                  <Settings size={20} color="var(--primary)" />
+                </div>
+                <div>
+                  <h3>Attendance and Payroll Reports</h3>
+                  <p>Generate scheduled attendance exports and custom salary reports.</p>
+                </div>
+              </div>
+              <button
+                className="dtr-export-close-btn"
+                type="button"
+                onClick={() => setShowExportCenter(false)}
+                title="Close"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="dtr-export-modal-body">
+              <div className="dtr-export-stack">
+                <div className="dtr-export-group-label">Quick Preset Exports</div>
+
+                {/* Monthly Export Row */}
+                <div className="dtr-export-section-box dtr-export-preset-grid">
+                  <div className="dtr-export-field">
+                    <label>Select Month</label>
+                    <input
+                      type="month"
+                      className="premium-input"
+                      value={exportMonth}
+                      onChange={e => setExportMonth(e.target.value)}
+                    />
+                  </div>
+                  <div className="dtr-export-field">
+                    <label>Employee</label>
+                    <MultiSelectDropdown
+                      options={employees}
+                      selected={monthlyExportUsers}
+                      onChange={setMonthlyExportUsers}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary dtr-export-action-btn"
+                    onClick={() => handlePresetExport('monthly')}
+                  >
+                    <Download size={15} /> Monthly PDF Export
+                  </button>
+                </div>
+
+                {/* Weekly Export Row */}
+                <div className="dtr-export-section-box dtr-export-preset-grid">
+                  <div className="dtr-export-field">
+                    <label>Select Week</label>
+                    <CustomWeekPicker
+                      value={exportWeekStr}
+                      onChange={val => setExportWeekStr(val)}
+                    />
+                  </div>
+                  <div className="dtr-export-field">
+                    <label>Employee</label>
+                    <MultiSelectDropdown
+                      options={employees}
+                      selected={weeklyExportUsers}
+                      onChange={setWeeklyExportUsers}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary dtr-export-action-btn"
+                    onClick={() => handlePresetExport('weekly')}
+                  >
+                    <Download size={15} /> Weekly PDF Export
+                  </button>
+                </div>
+
+                {/* Yearly Export Row */}
+                <div className="dtr-export-section-box dtr-export-preset-grid dtr-export-annual-row">
+                  <div className="dtr-export-annual-info">
+                    <span className="dtr-export-annual-title">Annual Report</span>
+                    <p>Generate a comprehensive report for the entire previous year automatically.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline dtr-export-action-btn"
+                    onClick={() => handlePresetExport('yearly')}
+                  >
+                    <Download size={15} /> Yearly PDF Export
+                  </button>
+                </div>
+
+                <div className="dtr-export-group-label" style={{ marginTop: '4px' }}>Custom Report</div>
+
+                {/* Report Salary Section */}
+                <div className="dtr-export-section-box dtr-export-salary-card">
+                  <div className="dtr-export-salary-header">
+                    <div>
+                      <h4>Report Salary</h4>
+                      <p>Customize category, date period, employee scope, and included PDF columns.</p>
+                    </div>
+                  </div>
+
+                  <div className="dtr-export-salary-grid">
+                    <div className="dtr-export-field">
+                      <label>Category</label>
+                      <select
+                        className="premium-input"
+                        value={fixedReportCategory}
+                        onChange={e => setFixedReportCategory(e.target.value)}
+                      >
+                        <option value="Timed">Report Salary - Timed</option>
+                        <option value="Fixed">Report Salary - Fixed</option>
+                        <option value="Punch Record">Report Salary - Attendance Punch</option>
+                        <option value="Time Card">Time Card</option>
+                      </select>
+                    </div>
+
+                    <div className="dtr-export-field">
+                      <label>Period Type</label>
+                      <select
+                        className="premium-input"
+                        value={fixedReportDateType}
+                        onChange={(e) => {
+                          const type = e.target.value;
+                          setFixedReportDateType(type);
+                          const today = new Date();
+                          if (type === 'week') {
+                            const dayOfWeek = today.getDay();
+                            const diff = (dayOfWeek + 7 - 4) % 7;
+                            const start = new Date(today);
+                            start.setDate(today.getDate() - diff);
+                            setFixedReportDateValue(getLocalDateStr(start));
+                          } else if (type === 'month') {
+                            setFixedReportDateValue(today.toISOString().slice(0, 7));
+                          } else if (type === 'day') {
+                            setFixedReportDateValue(getLocalDateStr(today));
+                          }
+                        }}
+                      >
+                        <option value="week">Specific Week</option>
+                        <option value="month">Specific Month</option>
+                        <option value="day">Specific Day</option>
+                      </select>
+                    </div>
+
+                    <div className="dtr-export-field">
+                      <label>Select Period</label>
+                      {fixedReportDateType === 'week' ? (
+                        <CustomWeekPicker
+                          value={fixedReportDateValue}
+                          onChange={val => setFixedReportDateValue(val)}
+                        />
+                      ) : (
+                        <input
+                          type={fixedReportDateType === 'day' ? 'date' : 'month'}
+                          className="premium-input"
+                          value={fixedReportDateValue}
+                          onChange={e => setFixedReportDateValue(e.target.value)}
+                        />
+                      )}
+                    </div>
+
+                    <div className="dtr-export-field">
+                      <label>Employee</label>
+                      <MultiSelectDropdown
+                        options={fixedReportCategory === 'Time Card' || fixedReportCategory === 'Punch Record' ? employees : employees.filter(e => {
+                          const eType = e.employee_type || 'Timed';
+                          const cat = fixedReportCategory === 'Timed' ? 'Timed' : 'Fixed';
+                          return eType === cat;
+                        })}
+                        selected={fixedReportUsers}
+                        onChange={setFixedReportUsers}
+                      />
+                    </div>
+                  </div>
+
+                  {fixedReportCategory !== 'Time Card' && fixedReportCategory !== 'Punch Record' && (
+                    <div className="dtr-export-columns-wrap">
+                      <div className="dtr-export-columns-title">Include Columns</div>
+                      <div className="dtr-export-columns-grid">
+                        {[
+                          { key: 'name', label: 'Name', defaultTrue: false },
+                          { key: 'day', label: 'Day', defaultTrue: true },
+                          ...(fixedReportCategory === 'Fixed'
+                            ? [
+                                { key: 'logInRecord', label: 'Log In Record', defaultTrue: true },
+                                { key: 'daysWorked', label: 'Days Worked', defaultTrue: true },
+                                { key: 'totalRate', label: 'Total Rate', defaultTrue: true },
+                              ]
+                            : [
+                                { key: 'amIn', label: 'AM IN', defaultTrue: true },
+                                { key: 'amOut', label: 'AM OUT', defaultTrue: true },
+                                { key: 'pmIn', label: 'PM IN', defaultTrue: true },
+                                { key: 'pmOut', label: 'PM OUT', defaultTrue: true },
+                                { key: 'totalHrs', label: 'Total Hrs', defaultTrue: false },
+                                { key: 'rate', label: 'Rate', defaultTrue: false },
+                                { key: 'earnings', label: 'Total Pay', defaultTrue: false },
+                              ]),
+                        ].map(({ key, label, defaultTrue }) => {
+                          const isChecked = defaultTrue ? pdfColumns[key] !== false : Boolean(pdfColumns[key]);
+                          return (
+                            <label key={key} className={`dtr-export-col-chip ${isChecked ? 'is-checked' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={e => setPdfColumns({ ...pdfColumns, [key]: e.target.checked })}
+                              />
+                              <span>{label}</span>
+                            </label>
                           );
                         })}
-                        {(() => {
-                          const overrideVal = getGrandTotalOverride(emp.id);
-                          const isEdited = overrideVal !== undefined;
-                          const finalHrs = isEdited ? overrideVal : grandTotalHrs;
+                      </div>
+                    </div>
+                  )}
 
-                          return (
-                            <tr className="grand-total-row">
-                              <td colSpan={5} style={{ textAlign: 'right', paddingRight: '24px', fontWeight: 800 }}>GRAND TOTAL</td>
-                              <td style={{ color: 'var(--primary)', fontWeight: 800 }}>
-                                {emp.employee_type === 'Fixed' ? '' : (
-                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                                    <span>{finalHrs > 0 ? formatHoursDuration(finalHrs) : '0hrs 0mins'}</span>
-                                    {isEdited && (
-                                      <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                        Manual
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </td>
-                              {isAdmin && emp.employee_type !== 'Fixed' && <td></td>}
-                              {isAdmin && emp.employee_type === 'Fixed' && (
-                                <td style={{ color: 'var(--primary)', fontWeight: 800, textAlign: 'center' }}>
-                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                                    <span>{formatHoursDuration(finalHrs)}</span>
-                                    {isEdited && (
-                                      <span style={{ fontSize: '0.7rem', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                        Manual
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                              )}
-                              <td></td>
-                              {isAdmin && (
-                                <td style={{ textAlign: 'center' }}>
-                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
-                                    <button
-                                      type="button"
-                                      className="btn-icon text-primary"
-                                      onClick={() => openGrandTotalModal(emp.id, emp.full_name, grandTotalHrs)}
-                                      title="Edit Grand Total"
-                                      style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', cursor: 'pointer', color: 'var(--primary)', padding: '4px 8px', borderRadius: '6px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
-                                    >
-                                      <Edit size={13} /> Edit
-                                    </button>
-                                    {isEdited && (
-                                      <button
-                                        type="button"
-                                        className="btn-icon"
-                                        onClick={() => resetGrandTotalOverride(emp.id, emp.full_name)}
-                                        title="Reset to Calculated"
-                                        style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', cursor: 'pointer', color: 'var(--danger)', padding: '4px 6px', borderRadius: '6px' }}
-                                      >
-                                        <RotateCcw size={13} />
-                                      </button>
-                                    )}
-                                  </div>
-                                </td>
-                              )}
-                            </tr>
-                          );
-                        })()}
-                      </tbody>
-                    </table>
+                  <div className="dtr-export-salary-footer">
+                    <button
+                      type="button"
+                      className="btn btn-primary dtr-export-action-btn"
+                      onClick={handleFixedReportExport}
+                    >
+                      <Download size={15} /> Export PDF
+                    </button>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Admin Edit/Add Modal */}
       {editModal.isOpen && (() => {
@@ -2872,9 +3589,9 @@ const AdminDtrPage = () => {
                     </div>
                   )}
 
-                  {/* ───────────────────────────────────────────────────────── */}
+                  {/* --------------------------------------------------------- */}
                   {/* FIXED EMPLOYEE FORMAT                                     */}
-                  {/* ───────────────────────────────────────────────────────── */}
+                  {/* --------------------------------------------------------- */}
                   {isFixed ? (
                     <div style={{ display: 'flex', gap: '16px' }}>
                       <div className="premium-select-group" style={{ flex: 1 }}>
@@ -2905,9 +3622,9 @@ const AdminDtrPage = () => {
                       </div>
                     </div>
                   ) : (
-                    /* ───────────────────────────────────────────────────────── */
+                    /* --------------------------------------------------------- */
                     /* TIMED EMPLOYEE FORMAT                                     */
-                    /* ───────────────────────────────────────────────────────── */
+                    /* --------------------------------------------------------- */
                     <>
                       {/* AM Block (Morning / Lunch Out) */}
                       <div className="dtr-modal-punch-card">
@@ -3226,7 +3943,7 @@ const AdminDtrPage = () => {
                 <label style={{ fontWeight: 600, fontSize: '0.85rem' }}>Grand Total Hours</label>
                 <input
                   type="number"
-                  step="0.25"
+                  step="0.01"
                   min="0"
                   className="premium-input"
                   value={grandTotalModal.overrideHours}
@@ -3288,6 +4005,22 @@ const AdminDtrPage = () => {
           </div>
         </div>
       )}
+
+      {/* Summary Detail Modal (Connected to 4 Cards & Date Filter) */}
+      <SummaryDetailModal
+        isOpen={summaryModal.isOpen}
+        onClose={() => setSummaryModal(prev => ({ ...prev, isOpen: false }))}
+        initialType={summaryModal.type}
+        summaryData={summaryData}
+        dtrFilterType={dtrFilterType}
+        dtrFilterValue={dtrFilterValue}
+        onFilterTypeChange={handleFilterTypeChange}
+        onFilterValueChange={val => setDtrFilterValue(val)}
+        onGoToToday={handleGoToToday}
+        filteredDays={filteredDays}
+        formatTime={formatTime}
+        formatHoursDuration={formatHoursDuration}
+      />
     </div>
   );
 };

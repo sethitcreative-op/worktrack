@@ -124,13 +124,20 @@ const Login = () => {
           <div className="brand-icon-wrapper">
             <img src="/img/logo.jpg" alt="WorkTrack Logo" className="logo-image-huge" />
           </div>
-          <h1 className="brand-title animated-title">WorkTrack</h1>
+          <h1 className="brand-title">Work<span className="brand-title-accent">Track</span></h1>
           <p className="brand-subtitle">Elevate your workforce with our state-of-the-art management system.</p>
         </div>
       </div>
 
       <div className="login-right-pane">
-        <div className="login-card glass">
+        <div className="login-card">
+          <div className="login-card-brand">
+            <div className="card-brand-logo-wrapper">
+              <img src="/img/logo.jpg" alt="WorkTrack Logo" className="card-brand-logo" />
+            </div>
+            <span className="card-brand-title">Work<span className="brand-title-accent">Track</span></span>
+          </div>
+
           <div className="login-header">
             <h2>Welcome Back</h2>
             <p>Sign in to your account</p>
@@ -211,7 +218,7 @@ const Login = () => {
               </a>
             </div>
 
-            <button type="submit" className="btn btn-primary login-btn">
+            <button type="submit" className="login-btn">
               Sign In
             </button>
           </form>
